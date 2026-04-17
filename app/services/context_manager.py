@@ -82,7 +82,7 @@ class ContextManager:
         "- Use only the information explicitly present in the provided documents.\n"
         "- EVERY bullet point MUST include at least one citation in the format: [File: filename.pdf, Page: X].\n"
         "- Do NOT infer, interpret, or introduce external knowledge.\n"
-        "- Cover the HR rule thoroughly by including relevant eligibility, timelines, approvals, limits, exceptions, or process steps only when they are supported by the cited text.\n- Detailed responses must NOT include interpretive sentences beyond the cited HR text.\n"
+        "- Cover the HR rule thoroughly by including relevant eligibility, timelines, approvals, limits, exceptions, or process steps only when they are supported by the cited text.\n- If the HR excerpt is partial or truncated, summarize the clearly visible policy points and state that the excerpt appears incomplete when needed.\n- Detailed responses must NOT include interpretive sentences beyond the cited HR text.\n"
         "- If a detail cannot be cited, it MUST NOT be included.\n"
         "- Expand each point ONLY by restating or clarifying cited text.\n"
         "- Do NOT exceed FIVE bullet points.\n\n"
@@ -377,6 +377,47 @@ class ContextManager:
         
         return "\n\n".join(formatted)
 
+    def _score_doc(self, doc: Dict[str, Any]) -> float:
+        if not isinstance(doc, dict):
+            return 0.0
+        for key in ("rerank_score", "relevance_score", "rrf_score", "dense_score", "sparse_score"):
+            value = doc.get(key)
+            if isinstance(value, (int, float)):
+                return float(value)
+        return 0.0
+
+    def _deduplicate_docs(self, docs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if not docs:
+            return []
+
+        unique_docs: Dict[str, Dict[str, Any]] = {}
+        duplicate_count = 0
+
+        for doc in docs:
+            content = (doc.get("page_content") or doc.get("content") or "").strip()
+            meta = doc.get("metadata", {}) if isinstance(doc, dict) else {}
+            dedup_key = "|".join([
+                content,
+                str(meta.get("file_name") or ""),
+                str(meta.get("page_number") or meta.get("page") or ""),
+            ])
+
+            if dedup_key not in unique_docs:
+                unique_docs[dedup_key] = doc
+                continue
+
+            duplicate_count += 1
+            existing = unique_docs[dedup_key]
+            if self._score_doc(doc) > self._score_doc(existing):
+                unique_docs[dedup_key] = doc
+
+        if duplicate_count:
+            logger.info(
+                f"[ContextManager] Removed {duplicate_count} duplicate retrieved chunks before prompt assembly."
+            )
+
+        return list(unique_docs.values())
+
     def _deduplicate_content(self, context: str) -> str:
         if not context: return ""
         paragraphs = context.split('\n\n')
@@ -429,3 +470,5 @@ def get_context_manager() -> ContextManager:
     else:
         logger.info("[ContextManager] Returning existing singleton instance.")
     return _context_manager
+
+
