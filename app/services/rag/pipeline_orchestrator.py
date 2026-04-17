@@ -36,7 +36,6 @@ from app.services.retrieval.model_router import get_model_router
 
 # Context Management
 from app.services.context_manager import get_context_manager
-from app.services.rag.sector_registry import get_available_sectors
 
 # Setup tracing and logging
 tracer = trace.get_tracer(__name__)
@@ -205,12 +204,7 @@ async def query_rag_pipeline(
             
             # 1. SETUP SECTORS (Universal Search)
             if sectors is None or len(sectors) == 0:
-                logger.info(" [SECTORS] Fetching all available sectors...")
-                all_sectors = get_available_sectors()
-                if not all_sectors:
-                    logger.warning(" [SECTORS] No global sectors found.")
-                    return { "result": "No global sectors found.", "source_documents": [], "is_comparative": True }
-                sectors = all_sectors
+                raise RuntimeError("Organization sector is required for HR single-sector retrieval")
             
             normalized_sectors = [s.strip().upper() for s in sectors if s and s.strip()]
             logger.info(f" [SECTORS] Active Sectors: {normalized_sectors}")
@@ -246,7 +240,7 @@ async def query_rag_pipeline(
                 return {
                     "result": existing_cache['llm_answer'],
                     "source_documents": [],
-                    "is_comparative": True,
+                    "is_comparative": False,
                     "model_used": "cached_response",
                     "processing_time": time.time() - total_start,
                     "from_cache": True
@@ -365,10 +359,10 @@ async def query_rag_pipeline(
             
             if not final_results:
                 logger.warning(" [RETRIEVAL] No relevant documents found across all sectors.")
-                no_results_msg = "I searched your project files and all available sectors, but could not find relevant information."
+                no_results_msg = "I searched your project documents but could not find relevant information."
                 # UPDATED: Pass style to history
                 await _save_to_history(chat_id, current_user.user_id, query, project_id, normalized_sectors, no_results_msg, style=style)
-                return { "result": no_results_msg, "source_documents": [], "is_comparative": True, "model_used": "none" }
+                return { "result": no_results_msg, "source_documents": [], "is_comparative": False, "model_used": "none" }
 
             docs_after_rerank = []
             for sector_result in final_results:
@@ -504,7 +498,7 @@ async def query_rag_pipeline(
                 "result": llm_answer,
                 "source_documents": all_docs,
                 "comparative_analysis": final_results,
-                "is_comparative": True,
+                "is_comparative": False,
                 "sources_queried": [normalized_project_id] + [s['sector'] for s in final_results],
                 "model_used": selected_model_name,
                 "processing_time": total_time,
@@ -565,3 +559,5 @@ async def query_rag_pipeline(
         asyncio.create_task(_run_comprehensive_evaluation_background(eval_data))
     
     return rag_result
+
+

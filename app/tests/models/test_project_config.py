@@ -26,7 +26,7 @@ def test_project_config_defaults():
     config = ProjectConfig()
 
     assert config.router_model == "qwen2.5:0.5b"
-    assert config.simple_model == "qwen2.5:7b-instruct-q4_K_M"
+    assert config.simple_model == "qwen2.5:1.5b-instruct"
     assert config.complex_model == "qwen2.5:14b"
     assert config.search_strategy == "hybrid"
     assert config.retrieval_depth == 5

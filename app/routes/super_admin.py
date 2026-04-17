@@ -144,23 +144,20 @@ async def upload_global_sector_file(
     """
     Upload a global sector file (Admin Only) with Duplicate Detection
     """
-    
+
     # 1. VERIFY ADMIN PERMISSIONS
     if current_user.role != "super_admin":
         logger.warning(f"[AUTH ALERT] User '{current_user.user_id}' tried to upload global files without permission.")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied. Super Admin privileges required."
-        )
-    
-    # 2. NORMALIZE AND VALIDATE SECTOR
-    normalized_sector = sector.strip().upper()
-    if normalized_sector not in ALLOWED_GLOBAL_SECTORS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid sector. Allowed sectors: {', '.join(ALLOWED_GLOBAL_SECTORS)}"
-        )
-    
+         )
+
+    # 2. NORMALIZE SECTOR (organization source)
+    normalized_sector = " ".join((sector or "").strip().split()).upper()
+    if not normalized_sector:
+        raise HTTPException(status_code=422, detail="Organization sector is required")
+
     # 3. VALIDATE DOCUMENT TYPE
     normalized_document_type = document_type.strip().lower()
     if normalized_document_type not in ALLOWED_DOCUMENT_TYPES:
@@ -170,7 +167,7 @@ async def upload_global_sector_file(
         )
     
     # Normalize Category (Required)
-    clean_category = category.strip()
+    clean_category = (category or "Organization").strip()
     if not clean_category:
          raise HTTPException(status_code=400, detail="Category cannot be empty or just whitespace.")
     
@@ -481,3 +478,8 @@ async def delete_global_file(
             status_code=500,
             detail=f"Failed to delete global file: {str(e)}"
         )
+
+
+
+
+

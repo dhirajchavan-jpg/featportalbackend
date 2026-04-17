@@ -63,81 +63,33 @@ class QueryUnderstanding(BaseModel):
 
 # --- MODIFIED FOR MULTI-SOURCE RETRIEVAL ---
 class QueryRequest(BaseModel):
-    """
-    Query request supporting multi-source retrieval and comparative analysis.
-    
-    NEW: sectors=None means search ALL available global sectors for comparison
-    """
+    """Single-sector query request for organization HR RAG."""
     query: str = Field(..., min_length=1, description="The user's search query")
-    
-    project_id: str = Field(..., description="The project ID (acts as a 'source' for user's uploaded files)")
+    project_id: str = Field(..., description="The project ID")
 
     style: Optional[str] = Field(
-        default="Detailed", 
+        default="Detailed",
         description="Response style: 'Simple', 'Formal', 'Detailed', 'Experimental'"
     )
-    
-    # --- MODIFIED: Now truly optional for comparative analysis ---
-    sectors: Optional[List[str]] = Field(
-        default=None, 
-        description="Optional list of global sectors. If None, searches ALL sectors for comparison"
-    )
-    
-    # NEW: Enable/disable comparative mode
-    comparative_mode: Optional[bool] = Field(
-        default=True,
-        description="If True and sectors=None, retrieves from ALL sectors and generates comparative answer"
-    )
-    
-    # NEW: Results per sector for comparison
-    results_per_sector: Optional[int] = Field(
-        default=3,
-        ge=1,
-        le=10,
-        description="Number of results to retrieve from each sector (for comparative mode)"
-    )
-    
+
     excluded_files: Optional[List[str]] = Field(
         default=None,
         description="Optional list of specific filenames to exclude from search results"
     )
-    
-    top_k: Optional[int] = Field(
-        default=None, 
-        ge=1, 
-        le=20, 
-        description="Total number of chunks to retrieve (ignored in comparative mode)"
-    )
-    
+
+    top_k: Optional[int] = Field(default=None, ge=1, le=20, description="Total number of chunks to retrieve")
     dense_weight: Optional[float] = Field(default=0.5, ge=0.0, le=1.0)
     sparse_weight: Optional[float] = Field(default=0.5, ge=0.0, le=1.0)
     use_reranking: Optional[bool] = Field(default=None)
-    
-    @validator('sectors')
-    def validate_sectors(cls, v):
-        """Ensure sectors list is not empty if provided"""
-        if v is not None and len(v) == 0:
-            raise ValueError("sectors list cannot be empty. Use None to search all sectors.")
-        return v
-    
+
     class Config:
         json_schema_extra = {
-            "example_comparative": {
-                "query": "What are the data retention requirements?",
+            "example": {
+                "query": "What is our leave policy for probation employees?",
                 "project_id": "Project_123",
-                "sectors": None,  # Search all sectors
-                "comparative_mode": True,
-                "results_per_sector": 3
-            },
-            "example_specific": {
-                "query": "What are RBI's KYC requirements?",
-                "project_id": "Project_123",
-                "sectors": ["RBI"],
-                "comparative_mode": False,
                 "top_k": 5
             }
         }
-
 
 # --- NEW: Enhanced source document with retrieval metadata ---
 class SourceDocument(BaseModel):

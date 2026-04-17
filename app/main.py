@@ -38,6 +38,7 @@ from app.utils.logger import setup_logger
 from app.middleware.prompt_validation import get_prompt_validator
 from fastapi.staticfiles import StaticFiles
 from app.routes.file_viewer import router as file_viewer_router
+from app.middleware.role_checker import require_roles
 
 from app.routes import evaluation
 from fastapi import BackgroundTasks
@@ -46,7 +47,7 @@ from fastapi import BackgroundTasks
 from app.schemas import (
     DeleteRequest, QueryRequest, UpdateRequest,
     StandardResponse, QueryResponseData, RagUploadResponseData,
-    SourceDocument, ChatHistoryEntry, RetrievalStats, GlobalFileUploadRequest, GlobalFileUploadResponse
+    SourceDocument, ChatHistoryEntry, RetrievalStats
 )
 # from app.services import rag_service
 from app.services.rag.file_indexing import process_and_index_file, delete_document_by_source, process_and_index_global_file, delete_global_document_by_source, update_document_sector as update_document_sector_service
@@ -108,10 +109,13 @@ async def lifespan(app: FastAPI):
         logger.warning(f"[WARNING] Redis connection failed: {e}. Async features may not work.")
     # ========================================================================
 
-    #  Verify MongoDB connection with pooling config
-    await verify_connection()
+    # Verify MongoDB connection with pooling config (non-fatal if unavailable)
+    mongo_connected = await verify_connection()
+    if mongo_connected:
+        await create_indexes()
+    else:
+        logger.warning("[WARNING] MongoDB is unavailable at startup. Continuing without DB-dependent features.")
 
-    await create_indexes() 
     load_models()
     logger.info("[INFO] All models loaded. Server is ready.")
     yield
@@ -346,112 +350,98 @@ async def health_check():
 @app.post("/upload", response_model=StandardResponse[RagUploadResponseData], tags=["RAG Document Management"])
 async def upload_document(
     project_id: str = Form(...),
-    sector: str = Form(...),
     file: UploadFile = File(...),
-    current_user: UserPayload = Depends(get_current_user),
+    current_user: UserPayload = Depends(require_roles("admin", "super_admin")),
 ):
-    sector = sector.lower().strip()
-
-    # --- 1. All Initial Validations (Updated) ---
+    # Resolve sector from project details only (single-sector model).
     if not project_id or not project_id.strip():
         raise HTTPException(status_code=422, detail="Project ID field cannot be empty.")
-    if not sector or not sector.strip():
-        raise HTTPException(status_code=422, detail="Sector field cannot be empty.")
 
     normalized_project_id = project_id.lower().strip()
 
     try:
-        await files_middleware.verify_project(normalized_project_id, current_user)
+        project_doc = await files_middleware.verify_project(normalized_project_id, current_user)
     except HTTPException as e:
         raise e
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Project verification failed: {e}")
 
+    org_sector = (project_doc.get("organization_sector") or "").strip().upper()
+    if not org_sector:
+        raise HTTPException(status_code=422, detail="Project organization sector is missing. Please update project details.")
+
     file_extension = os.path.splitext(file.filename)[1].lower()
-    
-    # --- CHANGED: Use settings and check keys of the MIME type dict ---
     if file_extension not in settings.ALLOWED_MIME_TYPES.keys():
         raise HTTPException(
-            status_code=400, 
+            status_code=400,
             detail=f"File type not supported. Allowed: {', '.join(settings.ALLOWED_MIME_TYPES.keys())}"
         )
 
-    content = await file.read()  # <-- Read file into memory *once*
-    
-    # --- CHANGED: Use settings for MAX_FILE_SIZE ---
+    content = await file.read()
     if len(content) > settings.MAX_FILE_SIZE:
         raise HTTPException(
-            status_code=400, 
+            status_code=400,
             detail=f"File size exceeds {settings.MAX_FILE_SIZE / (1024*1024)} MB"
         )
 
     try:
         mime_type = await asyncio.to_thread(magic.from_buffer, content, mime=True)
-        
-        # --- CHANGED: Use settings for ALLOWED_MIME_TYPES ---
         expected_mime = settings.ALLOWED_MIME_TYPES.get(file_extension)
-        
         if not expected_mime or mime_type != expected_mime:
             raise HTTPException(
                 status_code=400,
                 detail=f"File type mismatch. Extension is '{file_extension}' but content is '{mime_type}'. Dangerous file rejected."
             )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error during file type validation: {e}")
 
-    # --- 2. Define Final (Permanent) File Path ---
     file_id = str(uuid.uuid4())
     safe_filename = file.filename.replace(" ", "_").replace("/", "")
     unique_filename = f"{file_id}-{safe_filename}"
     permanent_file_path = os.path.join(settings.UPLOAD_DIR, unique_filename)
 
-    # --- 3. NEW: The Transaction Block (try...except...finally) ---
     temp_file = tempfile.NamedTemporaryFile(delete=False)
     temp_file_path = temp_file.name
 
     try:
-        # --- PRE-STEP: Write to *temporary* file ---
         def write_temp_file():
             with open(temp_file_path, "wb") as buffer:
                 buffer.write(content)
-        await asyncio.to_thread(write_temp_file)  # <-- NEW
+        await asyncio.to_thread(write_temp_file)
 
         chat_id = f"user_{current_user.user_id}_project_{normalized_project_id}"
 
-        # --- STEP 1: Indexing (from the temporary file) ---
         logger.info(f"--- [SYNC] Starting indexing for {file.filename} from temp file... ---")
         await asyncio.to_thread(
             process_and_index_file,
-            file_path=temp_file_path,  # <-- CHANGED: Use the temp path
+            file_path=temp_file_path,
             project_id=normalized_project_id,
-            sector=sector,
+            sector=org_sector,
             current_user=current_user,
             original_filename=file.filename
         )
         logger.info(f"--- [SYNC] Finished indexing for {file.filename}. ---")
 
-        # --- STEP 2: Store Metadata (in MongoDB) ---
         await _save_file_upload_to_history(
             chat_id=chat_id,
             user_id=current_user.user_id,
             project_id=normalized_project_id,
-            sector=sector,
+            sector=org_sector,
             file_id=file_id,
             file_name=file.filename
         )
 
-        # --- STEP 3: Save to Disk (Permanent) ---
         def write_permanent_file():
             with open(permanent_file_path, "wb") as buffer:
-                buffer.write(content)  # Write from the in-memory buffer
+                buffer.write(content)
         await asyncio.to_thread(write_permanent_file)
-        logger.info(f"--- [SUCCESS] Permanently saved file to {permanent_file_path} ---")
 
-        # --- SUCCESS: All steps passed ---
         response_data = RagUploadResponseData(
             file_id=file_id,
             file_name=file.filename,
-            sector=sector,
+            sector=org_sector,
             message="File uploaded and indexed successfully."
         )
 
@@ -462,7 +452,6 @@ async def upload_document(
         )
 
     except Exception as e:
-        # --- ROLLBACK ---
         logger.error(f"[ERROR] Upload failed: {e}. Starting rollback...")
         try:
             await delete_document_by_source(
@@ -470,154 +459,25 @@ async def upload_document(
                 project_id=normalized_project_id,
                 current_user=current_user
             )
-            logger.info(f"[ROLLBACK] Successfully deleted vectors from Qdrant for {file.filename}.")
         except Exception as delete_e:
             logger.error(f"[ROLLBACK ERROR] Failed to delete from Qdrant: {delete_e}")
 
-        # Re-raise the original error
         raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
 
     finally:
-        # --- CLEANUP ---
-        # 1. Close and delete the temporary file
         try:
             temp_file.close()
-            logger.info(f"[CLEANUP] Successfully closed and deleted temp file.")
-        except Exception as clean_e:
-            logger.error(f"[CLEANUP ERROR] Failed to close temp file: {clean_e}")
-
-        # 2. Close the original upload file handle
+        except Exception:
+            pass
         await file.close()
 
 
-@app.post("/admin/upload-global", response_model=StandardResponse[GlobalFileUploadResponse], tags=["Admin"])
-async def upload_global_sector_file(
-    sector: str = Form(...),
-    description: str = Form(None),
-    document_type: str = Form(...),
-    file: UploadFile = File(...),
-    current_user: UserPayload = Depends(get_current_user),  # Add admin check
-):
-    if not current_user.is_admin:  # Add this field to UserPayload
-        raise HTTPException(
-            status_code=403,
-            detail="Only administrators can upload global sector files"
-        )
-    
-    # 2. Normalize sector name
-    normalized_sector = sector.strip().upper()
-    
-    # 3. Validate allowed sectors
-    ALLOWED_SECTORS = ["RBI", "SEBI", "IRDAI", "GDPR", "HIPAA", "SOC2", "ISO27001", "PCI-DSS", "CCPA"]
-    if normalized_sector not in ALLOWED_SECTORS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid sector. Allowed: {', '.join(ALLOWED_SECTORS)}"
-        )
-    
-    # 4. Validate file (same as regular upload)
-    file_extension = os.path.splitext(file.filename)[1].lower()
-    if file_extension not in settings.ALLOWED_MIME_TYPES.keys():
-        raise HTTPException(
-            status_code=400,
-            detail=f"File type not supported. Allowed: {', '.join(settings.ALLOWED_MIME_TYPES.keys())}"
-        )
-    
-    content = await file.read()
-    if len(content) > settings.MAX_FILE_SIZE:
-        raise HTTPException(
-            status_code=400,
-            detail=f"File size exceeds {settings.MAX_FILE_SIZE / (1024*1024)} MB"
-        )
-    
-    # 5. Validate MIME type
-    mime_type = await asyncio.to_thread(magic.from_buffer, content, mime=True)
-    expected_mime = settings.ALLOWED_MIME_TYPES.get(file_extension)
-    if not expected_mime or mime_type != expected_mime:
-        raise HTTPException(
-            status_code=400,
-            detail=f"File type mismatch. Extension is '{file_extension}' but content is '{mime_type}'"
-        )
-    
-    # 6. Generate file ID and save temporarily
-    file_id = str(uuid.uuid4())
-    safe_filename = file.filename.replace(" ", "_").replace("/", "")
-    unique_filename = f"{file_id}-{safe_filename}"
-    
-    # Save to global directory
-    global_upload_dir = os.path.join(settings.UPLOAD_DIR, "global", normalized_sector)
-    os.makedirs(global_upload_dir, exist_ok=True)
-    permanent_file_path = os.path.join(global_upload_dir, unique_filename)
-    
-    temp_file = tempfile.NamedTemporaryFile(delete=False)
-    temp_file_path = temp_file.name
-    
-    try:
-        # Write to temp file
-        def write_temp_file():
-            with open(temp_file_path, "wb") as buffer:
-                buffer.write(content)
-        await asyncio.to_thread(write_temp_file)
-        
-        # 7. Process and index with GLOBAL metadata
-        logger.info(f"--- [GLOBAL] Indexing {file.filename} as {normalized_sector} ---")
-        
-        result = await asyncio.to_thread(
-            process_and_index_global_file,  # New function
-            file_path=temp_file_path,
-            sector=normalized_sector,
-            file_id=file_id,
-            original_filename=file.filename,
-            description=description
-        )
-        
-        # 8. Save to permanent location
-        def write_permanent_file():
-            with open(permanent_file_path, "wb") as buffer:
-                buffer.write(content)
-        await asyncio.to_thread(write_permanent_file)
-        
-        logger.info(f"--- [GLOBAL] Successfully saved {normalized_sector} file ---")
-        
-        # 9. Return response
-        response_data = GlobalFileUploadResponse(
-            file_id=file_id,
-            sector=normalized_sector,
-            filename=file.filename,
-            chunks_indexed=result['chunks_indexed'],
-            message=f"Global {normalized_sector} file uploaded successfully"
-        )
-        
-        return StandardResponse(
-            status_code=200,
-            message=f"Global sector file uploaded to {normalized_sector}",
-            data=response_data
-        )
-        
-    except Exception as e:
-        logger.error(f"[ERROR] Global upload failed: {e}")
-        
-        # Rollback: Delete from Qdrant
-        try:
-            await delete_global_document_by_source(
-                filename=file.filename,
-                sector=normalized_sector
-            )
-        except Exception as delete_e:
-            logger.error(f"[ROLLBACK ERROR] {delete_e}")
-        
-        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
-    
-    finally:
-        # Cleanup temp file
-        try:
-            temp_file.close()
-            os.unlink(temp_file_path)
-        except Exception as clean_e:
-            logger.error(f"[CLEANUP ERROR] {clean_e}")
-        
-        await file.close()
-# ... (rest of your main.py file) ...
+@app.post("/admin/upload-global", tags=["Admin"])
+async def upload_global_sector_file(*args, **kwargs):
+    raise HTTPException(
+        status_code=410,
+        detail="Global/regulatory sector uploads are deprecated. Use project-scoped organization uploads only."
+    )
 
 @app.get("/query/history/{project_id}", response_model=StandardResponse[List[ChatHistoryEntry]], tags=["RAG Query"])
 async def get_chat_history(
@@ -670,38 +530,32 @@ async def get_chat_history(
 @app.post("/query", response_model=StandardResponse[QueryResponseData], tags=["RAG Query"])
 async def query_documents(
     query_request: QueryRequest,
-    background_tasks: BackgroundTasks,  #  ADDED: For non-blocking evaluation
+    background_tasks: BackgroundTasks,
     current_user: UserPayload = Depends(get_current_user),
 ):
-    """
-    Multi-Source Query Endpoint with Dynamic Project Configuration.
-    """
-    
-    # --- 1. Validation & Logging ---
+    """Single-sector query endpoint with project-scoped organization sector."""
     validator = get_prompt_validator()
-    validation_result = validator.validate(query_request.query, raise_on_detection=True)
-    
+    validator.validate(query_request.query, raise_on_detection=True)
+
     logger.info(f"\n{'='*50}")
-    logger.info(f" [API] Incoming Query Request")
+    logger.info(" [API] Incoming Query Request")
     logger.info(f" User: {current_user.user_id}")
     logger.info(f" Project ID: {query_request.project_id}")
     logger.info(f" Query: {query_request.query}")
     logger.info(f"{'='*50}")
 
-    # ========================================================================
-    # NEW: FETCH PROJECT-SPECIFIC AI CONFIGURATION
-    # ========================================================================
+    # Resolve organization sector from project details (source of truth).
+    project_doc = await files_middleware.verify_project(query_request.project_id, current_user)
+    organization_sector = (project_doc.get("organization_sector") or "").strip().upper()
+    if not organization_sector:
+        raise HTTPException(status_code=422, detail="Project organization sector is missing")
+
     try:
         logger.info(f" [Config] Attempting to fetch AI Config for Project: {query_request.project_id}")
-        
-        # A. Fetch config from MongoDB
-        project_config = await project_config_collection.find_one(
-            {"project_id": query_request.project_id}
-        )
+        project_config = await project_config_collection.find_one({"project_id": query_request.project_id})
 
-        # B. Determine Settings (DB Config > System Defaults)
         if project_config:
-            logger.info(f"[Config] Found custom configuration in MongoDB.")
+            logger.info("[Config] Found custom configuration in MongoDB.")
             ai_settings = {
                 "router_model": project_config.get("router_model", settings.ROUTER_MODEL),
                 "simple_model": project_config.get("simple_model", settings.LLM_MODEL_SIMPLE),
@@ -712,7 +566,7 @@ async def query_documents(
                 "chat_history_limit": project_config.get("chat_history_limit", 10)
             }
         else:
-            logger.info(f" [Config] No custom configuration found. Falling back to System Defaults.")
+            logger.info(" [Config] No custom configuration found. Falling back to System Defaults.")
             ai_settings = {
                 "router_model": settings.ROUTER_MODEL,
                 "simple_model": settings.LLM_MODEL_SIMPLE,
@@ -722,123 +576,85 @@ async def query_documents(
                 "enable_reranking": True,
                 "chat_history_limit": 10
             }
-            
-        # Log the Selected Models explicitly
-        logger.info(f" [Models Selected] Router:  {ai_settings['router_model']}")
-        logger.info(f" [Models Selected] Simple:  {ai_settings['simple_model']}")
-        logger.info(f" [Models Selected] Complex: {ai_settings['complex_model']}")
-        logger.info(f" [Params] Strategy: {ai_settings['search_strategy']} | Depth: {ai_settings['retrieval_depth']} | Rerank: {ai_settings['enable_reranking']}")
 
-        # C. Override with Request-Specific Parameters (if allowed)
-        if query_request.top_k: 
-            logger.info(f" [Override] Retrieval Depth overridden by request: {query_request.top_k}")
+        if query_request.top_k:
             ai_settings["retrieval_depth"] = query_request.top_k
-        if query_request.use_reranking is not None: 
-            logger.info(f" [Override] Reranking overridden by request: {query_request.use_reranking}")
+        if query_request.use_reranking is not None:
             ai_settings["enable_reranking"] = query_request.use_reranking
 
     except Exception as e:
-        logger.error(f" [Config Error] Failed to load settings: {e}. Falling back to hardcoded defaults.")
-        ai_settings = None # Pipeline will handle None by using defaults
+        logger.error(f" [Config Error] Failed to load settings: {e}. Falling back to defaults.")
+        ai_settings = None
 
-    # ========================================================================
-
-    # --- 2. Execute RAG Pipeline (Updated Signature) ---
-    logger.info(f" [Pipeline] Starting RAG Pipeline Orchestrator...")
-    
+    logger.info(" [Pipeline] Starting RAG Pipeline Orchestrator...")
     result = await query_rag_pipeline(
         query=query_request.query,
         current_user=current_user,
         project_id=query_request.project_id,
-        sectors=query_request.sectors,
+        sectors=[organization_sector],
         excluded_files=query_request.excluded_files,
-        
-        # Pass the dynamic configuration dictionary
-        ai_config=ai_settings, 
-        
-        background_tasks=background_tasks 
+        ai_config=ai_settings,
+        background_tasks=background_tasks
     )
-    
-    logger.info(f" [Pipeline] Execution Completed.")
-    logger.info(f" [Result] Final Model Used: {result.get('model_used', 'Unknown')}")
-    
-    # --- 3. Format Source Documents ---
+
     source_docs_list = []
     for doc in result.get("source_documents", []):
         if isinstance(doc, dict):
             source_docs_list.append(SourceDocument(
-                page_content=doc.get('page_content', ''),
-                metadata=doc.get('metadata', {}),
-                relevance_score=doc.get('relevance_score'),
-                dense_score=doc.get('dense_score'),
-                sparse_score=doc.get('sparse_score'),
-                rerank_score=doc.get('rerank_score')
+                page_content=doc.get("page_content", ""),
+                metadata=doc.get("metadata", {}),
+                relevance_score=doc.get("relevance_score"),
+                dense_score=doc.get("dense_score"),
+                sparse_score=doc.get("sparse_score"),
+                rerank_score=doc.get("rerank_score")
             ))
 
-    # ========================================================================
-    # CAPTURE TRACE CONTEXT & TRIGGER EVALUATION (Existing Logic)
-    # ========================================================================
     current_span = trace.get_current_span()
     span_context = current_span.get_span_context()
-    
     trace_id = None
     if span_context.is_valid:
         span_id = format(span_context.span_id, "016x")
         trace_id = format(span_context.trace_id, "032x")
-        
-        logger.info(f" [Trace] Scheduling evaluation for Trace ID: {trace_id}")
-        
         background_tasks.add_task(
             evaluate_rag_interaction,
             query=query_request.query,
             response=result.get("result", ""),
-            retrieved_docs=source_docs_list, 
+            retrieved_docs=source_docs_list,
             span_id=span_id
         )
-    else:
-        logger.warning(" [Trace] No active span found. Evaluation skipped.")
 
-    # ========================================================================
-
-    # --- 4. Build Statistics & Response ---
-    # Use retrieval stats from the pipeline result if available
-    pipe_stats = result.get('retrieval_stats', {})
-    
+    pipe_stats = result.get("retrieval_stats", {})
     retrieval_stats = RetrievalStats(
-        total_chunks_searched=pipe_stats.get('total_chunks_searched', len(source_docs_list)),
+        total_chunks_searched=pipe_stats.get("total_chunks_searched", len(source_docs_list)),
         chunks_retrieved=len(source_docs_list),
-        sources_queried=result.get('sources_queried', [query_request.project_id]),
-        excluded_files_count=result.get('excluded_files_count', 0),
-        retrieval_method=pipe_stats.get('retrieval_method', 'hybrid'),
-        reranking_applied=pipe_stats.get('reranking_applied', True),
-        processing_time_ms=result.get('processing_time', 0) * 1000
+        sources_queried=result.get("sources_queried", [query_request.project_id]),
+        excluded_files_count=result.get("excluded_files_count", 0),
+        retrieval_method=pipe_stats.get("retrieval_method", "hybrid"),
+        reranking_applied=pipe_stats.get("reranking_applied", True),
+        processing_time_ms=result.get("processing_time", 0) * 1000
     )
-    
-    # Build response data
+
     response_data = QueryResponseData(
         result=result.get("result", ""),
         source_documents=source_docs_list,
         retrieval_stats=retrieval_stats,
-        sources_used=result.get('sources_used')
+        sources_used=result.get("sources_used")
     )
-
-    logger.info(f" [API] Sending response to client.")
 
     return StandardResponse(
         status="success",
         status_code=200,
-        message="Query processed successfully with multi-source retrieval",
+        message="Query processed successfully",
         data=response_data,
         meta={
-            "model_used": result.get('model_used'),
-            "query_complexity": result.get('meta', {}).get('query_complexity'),
-            "from_cache": result.get('from_cache', False),
+            "model_used": result.get("model_used"),
+            "query_complexity": result.get("meta", {}).get("query_complexity"),
+            "from_cache": result.get("from_cache", False),
             "trace_id": trace_id,
             "evaluation_status": "scheduled",
-            "evaluation_dashboard": f"http://localhost:8000/eval-dashboard"
+            "evaluation_dashboard": "http://localhost:8000/eval-dashboard"
         }
     )
-
 
 @app.post("/delete-document", response_model=StandardResponse[dict], tags=["RAG Document Management"])
 async def delete_document(
@@ -1096,3 +912,9 @@ async def download_logs_excel(
 #         message="System monitoring data retrieved.",
 #         data=current_status
 #     )
+
+
+
+
+
+

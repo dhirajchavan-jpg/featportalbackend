@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 # REMOVED: MODEL_SERVER_URL (Hardcoded port 8074 is gone)
 
 # --- FIXED: Updated URL to match ocr_service_main.py ---
-PADDLE_SERVICE_URL = "http://localhost:8001/ocr/" 
+PADDLE_SERVICE_URL = "http://localhost:8003/ocr/" 
 
 class OCREngine:
     """
@@ -54,11 +54,11 @@ class OCREngine:
 
     def is_service_available(self) -> bool:
         """
-        Checks if the PaddleOCR service (port 8001) is running.
+        Checks if the PaddleOCR service (port 8003) is running.
         Returns True if reachable, False otherwise.
         """
         try:
-            # Check the base URL (http://localhost:8001/) with a short timeout
+            # Check the base URL (http://localhost:8003/) with a short timeout
             # base_url = PADDLE_SERVICE_URL.replace("/ocr/", "/")
             requests.get(PADDLE_SERVICE_URL, timeout=2)
             return True

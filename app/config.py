@@ -1,4 +1,4 @@
-
+﻿
 import os
 from typing import Dict, List, ClassVar, Optional
 from pydantic import Field
@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     # NEW: REDIS SETTINGS (For Async Queue)
     # =========================================================
     REDIS_HOST: str = "localhost"
-    REDIS_PORT: int = 6381
+    REDIS_PORT: int = 6382
     REDIS_DB: int = 0
     REDIS_QUEUE_NAME: str = "rag_query_queue"
     REDIS_RESULT_TTL: int = 3600  # Results expire after 1 hour
@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     QDRANT_HOST: str = "http://localhost"
     QDRANT_PORT: int = 6333
     QDRANT_URL: str = f"{QDRANT_HOST}:{QDRANT_PORT}"
-    QDRANT_COLLECTION_NAME: str = "rag_collection_v2"
+    QDRANT_COLLECTION_NAME: str = "hr_rag_collection"
     
     # Qdrant Configuration for Hybrid Search
     QDRANT_DENSE_VECTOR_NAME: str = "dense"  # BGE-M3 embeddings
@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     BACKEND_PUBLIC_URL: str = "http://localhost:8072"
     
     # Multi-Model Setup
-    LLM_MODEL_SIMPLE: str = "qwen2.5:7b-instruct-q4_K_M"
+    LLM_MODEL_SIMPLE: str = "qwen2.5:1.5b-instruct"
     LLM_MODEL_COMPLEX: str = "qwen2.5:14b"
     LLM_MODEL: str = LLM_MODEL_SIMPLE
     
@@ -53,7 +53,7 @@ class Settings(BaseSettings):
 
     # MongoDB Cache Settings
     MONGO_URI: str = "mongodb://localhost:27017/"
-    MONGO_DB_NAME: str = "mydatabase"
+    MONGO_DB_NAME: str = "feathr_hr_portal_hr"
     MONGO_COLLECTION_NAME: str = "query_cache"
 
     # File Settings
@@ -157,3 +157,5 @@ settings = Settings()
 os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
 os.makedirs(settings.PROCESSED_DIR, exist_ok=True)
 os.makedirs(settings.JSON_OUTPUT_DIR, exist_ok=True)
+
+

@@ -26,11 +26,12 @@ from app.services.rag.file_indexing import process_and_index_file, process_and_i
 from app.dependencies import UserPayload
 # --- ADDED COLLECTIONS FOR ROLLBACK ---
 from app.database import (
-    verify_connection, 
-    close_mongo_connection, 
-    create_indexes, 
-    file_collection, 
-    Global_file_collection
+    verify_connection,
+    close_mongo_connection,
+    create_indexes,
+    file_collection,
+    Global_file_collection,
+    project_collection
 )
 from app.core.llm_provider import load_models
 from app.services.rag.evaluation_runner import _run_comprehensive_evaluation_background
@@ -130,7 +131,7 @@ async def process_job(job_json: str):
                 query=job_data["query"],
                 current_user=current_user,
                 project_id=job_data["project_id"],
-                sectors=job_data.get("sectors"),
+                sectors=[job_data.get("sector")] if job_data.get("sector") else None,
                 excluded_files=job_data.get("excluded_files"),
                 style=job_data.get("style") or "Detailed", 
                 ai_config=job_data.get("ai_config"), 
@@ -171,113 +172,106 @@ async def process_job(job_json: str):
         # =========================================================================
         elif job_type == "file_upload":
             logger.info(f" [Worker] Processing File Upload: {job_data.get('original_filename')}")
-            
+
             try:
-                # 1. Run the heavy indexing (OCR, Chunking, Vectors)
+                # Trust only backend-derived project sector by re-reading project doc.
+                project_obj = await project_collection.find_one({"_id": ObjectId(job_data["project_id"])})
+                if not project_obj:
+                    raise RuntimeError("Project not found for queued upload job")
+
+                resolved_sector = (project_obj.get("organization_sector") or "").strip().upper()
+                if not resolved_sector:
+                    raise RuntimeError("Project organization sector is missing")
+
+                if job_data.get("sector") and job_data.get("sector").strip().upper() != resolved_sector:
+                    logger.warning(" [Worker] Job sector mismatch detected. Overriding with project organization sector.")
+
                 result = await asyncio.to_thread(
                     process_and_index_file,
                     file_path=job_data["file_path"],
                     project_id=job_data["project_id"],
-                    sector=job_data["sector"],
+                    sector=resolved_sector,
                     current_user=current_user,
                     doc_type=job_data.get("doc_type", "general"),
                     original_filename=job_data.get("original_filename"),
-                    file_id=job_data.get("file_id"), 
+                    file_id=job_data.get("file_id"),
                     ocr_engine=job_data.get("ocr_engine", "paddleocr")
                 )
-                
+
                 duration = round(time.time() - start_time, 2)
                 result["processing_time"] = duration
-                
-                # --- CHECK FOR CANCELLATION BEFORE SAVING TO DB ---
+
                 if await redis_service.is_job_cancelled(task_id):
                     logger.warning(f" [Worker] Job {task_id} CANCELLED by user. Aborting DB Save.")
-                    # Note: We do NOT rollback DB here because we haven't saved yet!
-                    # You might want to cleanup vectors if process_and_index_file succeeded, 
-                    # but simple cancellation just stops here.
-                    
                     await redis_service.update_job_result(task_id, {"error": "Cancelled by user"}, status="cancelled")
-                    return # Exit without saving success
+                    return
 
-                # 2. SUCCESS! Now insert metadata into MongoDB
-                logger.info(f" [Worker] Indexing successful. Saving metadata to MongoDB for file_id: {job_data.get('file_id')}")
-                
-                # Construct the Model from Job Data
                 file_obj_id = ObjectId(job_data["file_id"])
                 file_doc = FileModel(
                     project_id=job_data["project_id"],
                     filename=job_data["original_filename"],
                     file_url=job_data["file_path"],
-                    file_hash=job_data.get("file_hash"), # Passed from middleware
-                    sector=job_data["sector"],
+                    file_hash=job_data.get("file_hash"),
+                    sector=resolved_sector,
                     category=job_data.get("category", "General"),
                     compliance_type=job_data.get("compliance_type", "General"),
                     user_id=current_user.user_id
                 )
-                
-                # Insert using the specific ID we used for Qdrant
+
                 doc_dict = file_doc.model_dump(exclude={"file_id"})
                 doc_dict["_id"] = file_obj_id
-                
                 await file_collection.insert_one(doc_dict)
-                logger.info(f" [Worker] Metadata saved to MongoDB.")
 
-                # 3. Update Redis with Completed Status
                 await redis_service.update_job_result(task_id, result, status="completed")
                 logger.info(f" [Worker] File Indexing Job {task_id} COMPLETED.")
 
             except Exception as e:
-                # --- NO ROLLBACK NEEDED HERE (DB was never touched) ---
-                # We just log and fail. 
                 logger.error(f" [Worker] File indexing failed: {e}")
-                
-                # If vectors were partially indexed, they remain. 
-                # (Optional: You could call delete_document_by_source here if strict cleanup is needed)
-                
-                raise e # Re-raise to trigger main error handler
+                raise e
 
-        # =========================================================================
-        # CASE C: GLOBAL FILE UPLOAD (Super Admin)
-        # =========================================================================
         elif job_type == "global_file_upload":
-            logger.info(f" [Worker] Processing Global File: {job_data.get('original_filename')}")
-            
+            logger.info(f" [Worker] Processing Global File Upload: {job_data.get('original_filename')}")
+
             try:
                 result = await asyncio.to_thread(
                     process_and_index_global_file,
                     file_path=job_data["file_path"],
                     sector=job_data["sector"],
-                    file_id=job_data["file_id"],
-                    original_filename=job_data["original_filename"],
-                    extra_metadata=job_data.get("extra_metadata"),
+                    file_id=job_data.get("file_id"),
+                    original_filename=job_data.get("original_filename"),
+                    extra_metadata=job_data.get("extra_metadata", {}),
                     ocr_engine=job_data.get("ocr_engine", "paddleocr")
                 )
-                
+
                 duration = round(time.time() - start_time, 2)
                 result["processing_time"] = duration
-                
-                # --- CHECK FOR CANCELLATION BEFORE SAVING ---
-                if await redis_service.is_job_cancelled(task_id):
-                    logger.warning(f" [Worker] Job {task_id} CANCELLED by user. Rolling back...")
-                    try:
-                        await Global_file_collection.delete_one({"file_id": job_data.get("file_id")})
-                    except Exception as rb_e:
-                        logger.error(f" [Worker] Rollback failed: {rb_e}")
-                    
-                    await redis_service.update_job_result(task_id, {"error": "Cancelled by user"}, status="cancelled")
-                    return # Exit without saving success
 
-                # Save Success
+                if await redis_service.is_job_cancelled(task_id):
+                    logger.warning(f" [Worker] Global job {task_id} CANCELLED by user.")
+                    await redis_service.update_job_result(task_id, {"error": "Cancelled by user"}, status="cancelled")
+                    return
+
                 await redis_service.update_job_result(task_id, result, status="completed")
                 logger.info(f" [Worker] Global File Job {task_id} COMPLETED.")
 
             except Exception as e:
-                # --- ROLLBACK ON FAILURE ---
-                logger.error(f" [Worker] Global indexing failed. Rolling back MongoDB entry for {job_data.get('file_id')}")
+                logger.error(f" [Worker] Global indexing failed: {e}")
+
+                # Rollback global metadata if indexing failed
                 try:
-                    await Global_file_collection.delete_one({"file_id": job_data.get("file_id")})
+                    if job_data.get("file_id"):
+                        await Global_file_collection.delete_one({"file_id": job_data.get("file_id")})
                 except Exception:
                     pass
+
+                # Cleanup physical file on failure
+                try:
+                    file_path = job_data.get("file_path")
+                    if file_path and os.path.exists(file_path):
+                        os.remove(file_path)
+                except Exception:
+                    pass
+
                 raise e
 
         # =========================================================================
@@ -364,3 +358,8 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, signal_handler)
     
     asyncio.run(worker_loop())
+
+
+
+
+
