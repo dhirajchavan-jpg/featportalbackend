@@ -57,7 +57,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # ----------------------------------------------------
         # CASE 2: CHAT QUERY RATE LIMIT
         # ----------------------------------------------------
-        if path.startswith("/query") and method == "POST":
+        if method == "POST" and (
+            path.startswith("/query") or path == "/rag/query/async"
+        ):
 
 
             payload = self._get_payload(request)

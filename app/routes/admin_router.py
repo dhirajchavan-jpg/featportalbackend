@@ -26,7 +26,10 @@ async def upload_global_sector_file(current_user: UserPayload = Depends(get_curr
 
 @router.get("/files", tags=["Admin"])
 async def get_all_global_files(current_user: UserPayload = Depends(get_current_user)):
-    verify_admin(current_user)
+    # Project detail uses this endpoint for organization-level documents that
+    # should be visible to any authenticated project participant, including
+    # end users. Restricting this to admins caused the frontend to swallow a
+    # 403 and render an empty list for users.
 
     docs = await Global_file_collection.find({}).to_list(None)
     files_list = []
@@ -53,3 +56,4 @@ async def list_global_sectors(current_user: UserPayload = Depends(get_current_us
         status_code=410,
         detail="Global sectors endpoint is deprecated in HR single-sector mode."
     )
+

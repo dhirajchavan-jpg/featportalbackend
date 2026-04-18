@@ -501,6 +501,7 @@ async def get_chat_history(
         "message_type": 1,
         "user_query": 1,
         "llm_answer": 1,
+        "source_documents": 1,
         "file_id": 1,
         "file_name": 1,
         "sector": 1,
@@ -912,6 +913,8 @@ async def download_logs_excel(
 #         message="System monitoring data retrieved.",
 #         data=current_status
 #     )
+
+
 
 
 

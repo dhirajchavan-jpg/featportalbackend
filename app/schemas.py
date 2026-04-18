@@ -22,6 +22,10 @@ class ChatHistoryEntry(BaseModel):
     # --- Fields for "text" messages (now optional) ---
     user_query: Optional[str] = Field(None, description="The user's text query")
     llm_answer: Optional[str] = Field(None, description="The AI's text response")
+    source_documents: Optional[List["SourceDocument"]] = Field(
+        default=None,
+        description="Retrieved source chunks associated with the AI response"
+    )
     
     # --- NEW Fields for "file" messages ---
     file_id: Optional[str] = Field(None, description="The unique ID of an uploaded file")
@@ -354,3 +358,5 @@ class FullSystemMonitor(BaseModel):
     disk_usage: float
     network_connections: int
     model_server: Optional[ModelServerStats] = None
+
+

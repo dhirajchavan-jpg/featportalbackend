@@ -117,7 +117,8 @@ class Settings(BaseSettings):
 
     # Rate Limiting Settings
     RATE_LIMIT_UPLOADS_PER_HOUR: int = 5
-    RATE_LIMIT_CHAT_PER_MINUTE: int = 15
+    RATE_LIMIT_CHAT_PER_MINUTE: int = 1
+    RATE_LIMIT_CHAT_WINDOW_SECONDS: int = 60 * 60
 
     # =========================================================
     # MODIFIED: MODEL SERVER URLS (For Multi-GPU Load Balancing)

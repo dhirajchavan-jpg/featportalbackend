@@ -35,6 +35,14 @@ def app():
     async def query():
         return {"ok": True}
 
+    @app.post("/rag/query/async")
+    async def async_query():
+        return {"ok": True}
+
+    @app.get("/rag/query/status/{task_id}")
+    async def async_query_status(task_id: str):
+        return {"task_id": task_id, "status": "queued"}
+
     return app
 
 
@@ -240,6 +248,90 @@ def test_chat_success(mock_consume, mock_decode, client, valid_token, jwt_payloa
 
     assert "X-RateLimit-Limit" in response.headers
     assert "X-RateLimit-Remaining" in response.headers
+
+
+def test_async_chat_unauthenticated(client):
+    """
+    Summary:
+        Unauthenticated async chat submissions are rejected.
+
+    Explanation:
+        Ensures the real UI submit endpoint is protected by the same
+        authentication gate as the synchronous chat route.
+    """
+    response = client.post("/rag/query/async")
+
+    assert response.status_code == 401
+    assert response.json()["message"] == "Invalid or missing token."
+
+
+@patch("app.middleware.rate_limit_middleware.decode_access_token")
+@patch("app.middleware.rate_limit_middleware.try_consume_chat_token")
+def test_async_chat_rate_limited(mock_consume, mock_decode, client, valid_token, jwt_payload):
+    """
+    Summary:
+        Async chat submissions exceeding rate limits are rejected.
+
+    Explanation:
+        Confirms the middleware now throttles the actual chat submission
+        route used by the frontend.
+    """
+    mock_decode.return_value = jwt_payload
+    mock_consume.return_value = (False, 0, 45)
+
+    response = client.post(
+        "/rag/query/async",
+        headers={"Authorization": valid_token},
+        json={"query": "Hello"},
+    )
+
+    assert response.status_code == 429
+    body = response.json()
+    assert body["retry_after_seconds"] == 45
+    assert body["remaining"] == 0
+
+
+@patch("app.middleware.rate_limit_middleware.decode_access_token")
+@patch("app.middleware.rate_limit_middleware.try_consume_chat_token")
+def test_async_chat_success(mock_consume, mock_decode, client, valid_token, jwt_payload):
+    """
+    Summary:
+        Async chat submissions within rate limits succeed.
+
+    Explanation:
+        Confirms the middleware applies the standard chat headers to the
+        frontend submit route when capacity remains.
+    """
+    mock_decode.return_value = jwt_payload
+    mock_consume.return_value = (True, 14, 60)
+
+    response = client.post(
+        "/rag/query/async",
+        headers={"Authorization": valid_token},
+        json={"query": "Hello"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert "X-RateLimit-Limit" in response.headers
+    assert "X-RateLimit-Remaining" in response.headers
+
+
+@patch("app.middleware.rate_limit_middleware.try_consume_chat_token")
+def test_async_chat_status_not_rate_limited(mock_consume, client):
+    """
+    Summary:
+        Async status polling is not subject to chat submission throttling.
+
+    Explanation:
+        Ensures only submit endpoints are rate limited, while task polling
+        remains available to the frontend.
+    """
+    response = client.get("/rag/query/status/task_123")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "queued"
+    mock_consume.assert_not_called()
 
 
 # -------------------------

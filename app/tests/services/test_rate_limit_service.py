@@ -17,12 +17,14 @@ def mock_settings():
     with patch("app.services.rate_limit_service.settings") as settings:
         # Set small limits for easy testing
         settings.RATE_LIMIT_UPLOADS_PER_HOUR = 5
-        settings.RATE_LIMIT_CHAT_PER_MINUTE = 2
+        settings.RATE_LIMIT_CHAT_PER_MINUTE = 1
+        settings.RATE_LIMIT_CHAT_WINDOW_SECONDS = 3600
         
         # We also need to patch the module-level constants that imported these settings
         with patch("app.services.rate_limit_service.UPLOAD_LIMIT", 5), \
-             patch("app.services.rate_limit_service.CHAT_CAPACITY", 2), \
-             patch("app.services.rate_limit_service.CHAT_LIMIT", 2):
+             patch("app.services.rate_limit_service.CHAT_CAPACITY", 1), \
+             patch("app.services.rate_limit_service.CHAT_LIMIT", 1), \
+             patch("app.services.rate_limit_service.CHAT_WINDOW_SECONDS", 3600):
             yield settings
 
 @pytest.fixture
@@ -103,7 +105,7 @@ async def test_chat_first_request_creates_window(mock_settings, mock_collections
     allowed, remaining, retry_after = await try_consume_chat_token("u1")
 
     assert allowed is True
-    assert remaining == 1  # Capacity 2 - 1 used
+    assert remaining == 0
     assert retry_after == 0
     chat_coll.insert_one.assert_called_once()
 
@@ -123,7 +125,7 @@ async def test_chat_within_window_success(mock_settings, mock_collections):
     allowed, remaining, retry_after = await try_consume_chat_token("u1")
 
     assert allowed is True
-    assert remaining == 1 # Capacity 2 - 1 used
+    assert remaining == 0
     chat_coll.update_one.assert_called_once()
     
     # Verify we incremented count
@@ -136,21 +138,21 @@ async def test_chat_limit_exceeded(mock_settings, mock_collections):
     """Test blocking when capacity is full within active window."""
     _, chat_coll = mock_collections
     
-    # Active window, count is ALREADY 2 (Limit is 2)
+    # Active window, count is already 1 (limit is 1)
     now = datetime.utcnow()
-    window_start = now - timedelta(seconds=30) # Window is half gone
+    window_start = now - timedelta(seconds=1800)
     
     chat_coll.find_one = AsyncMock(return_value={
         "window_start": window_start,
-        "count": 2 
+        "count": 1
     })
 
     allowed, remaining, retry_after = await try_consume_chat_token("u1")
 
     assert allowed is False
     assert remaining == 0
-    # Retry after should be roughly 30 seconds (60s total - 30s elapsed)
-    assert 29 <= retry_after <= 31 
+    # Retry after should be roughly 30 minutes (1h total - 30m elapsed)
+    assert 1799 <= retry_after <= 1801
     chat_coll.update_one.assert_not_called()
 
 @pytest.mark.asyncio
@@ -158,19 +160,18 @@ async def test_chat_window_expired_reset(mock_settings, mock_collections):
     """Test that expired window resets count."""
     _, chat_coll = mock_collections
     
-    # Window started 70 seconds ago (expired > 60s)
-    # Even though count was 2 (full), it should reset now
+    # Window started over one hour ago, so it should reset now
     now = datetime.utcnow()
     chat_coll.find_one = AsyncMock(return_value={
-        "window_start": now - timedelta(seconds=70),
-        "count": 2 
+        "window_start": now - timedelta(seconds=3700),
+        "count": 1
     })
     chat_coll.update_one = AsyncMock()
 
     allowed, remaining, retry_after = await try_consume_chat_token("u1")
 
     assert allowed is True
-    assert remaining == 1 # Reset to 0, then consumed 1. Remaining = 2 - 1 = 1
+    assert remaining == 0
     
     # Verify update logic sets window_start to NOW
     call_args = chat_coll.update_one.call_args[0]

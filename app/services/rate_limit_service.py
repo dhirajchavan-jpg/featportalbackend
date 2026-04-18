@@ -14,8 +14,9 @@ UPLOADS_COLL = db.get_collection("rate_limits_uploads")
 CHAT_COLL = db.get_collection("rate_limits_chat")
 
 UPLOAD_LIMIT = settings.RATE_LIMIT_UPLOADS_PER_HOUR
-CHAT_LIMIT = settings.RATE_LIMIT_CHAT_PER_MINUTE   # e.g., 2 per minute
+CHAT_LIMIT = settings.RATE_LIMIT_CHAT_PER_MINUTE
 CHAT_CAPACITY = settings.RATE_LIMIT_CHAT_PER_MINUTE
+CHAT_WINDOW_SECONDS = settings.RATE_LIMIT_CHAT_WINDOW_SECONDS
 
 
 
@@ -84,11 +85,11 @@ async def try_consume_uploads(user_id: str, count: int) -> Tuple[bool, int, int]
 async def try_consume_chat_token(user_id: str, count: int = 1):
     """
     Sliding-window chat rate limiting.
-    Limits: CHAT_CAPACITY requests inside a 60-second window.
+    Limits: CHAT_CAPACITY requests inside the configured window.
     Window starts at the user's first request.
     """
     now = datetime.utcnow()
-    window_seconds = 60
+    window_seconds = CHAT_WINDOW_SECONDS
 
     try:
         doc = await CHAT_COLL.find_one({"user_id": user_id})
