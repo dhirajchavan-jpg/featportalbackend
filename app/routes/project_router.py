@@ -13,6 +13,7 @@ from app.schemas import StandardResponse
 from app.middleware.role_checker import require_roles
 from app.auth.jwt_bearer import JWTBearer
 from app.utils.logger import setup_logger
+from app.config import normalize_complex_model
 
 logger = setup_logger()
 router = APIRouter()
@@ -194,13 +195,14 @@ async def get_project_settings(project_id: str):
     config = await project_config_collection.find_one({"project_id": project_id})
     if config:
         config.pop("_id", None)
+        config["complex_model"] = normalize_complex_model(config.get("complex_model"))
         return StandardResponse(status="success", status_code=200, message="Config found", data=config)
 
     defaults = {
         "project_id": project_id,
         "router_model": "qwen2.5:0.5b",
         "simple_model": "qwen2.5:1.5b-instruct",
-        "complex_model": "qwen2.5:14b",
+        "complex_model": "gemma:7b",
         "search_strategy": "hybrid",
         "retrieval_depth": 5,
         "enable_reranking": True,

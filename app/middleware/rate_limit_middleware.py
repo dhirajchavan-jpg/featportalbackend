@@ -23,9 +23,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # ----------------------------------------------------
         # CASE 1: FILE UPLOAD ENDPOINTS (bulk + single upload)
         # ----------------------------------------------------
-        if (path == "/upload" and method == "POST") or (
-            path.startswith("/files/projects") and method == "POST"
-        ):
+        if method == "POST" and self._is_upload_endpoint(path):
             payload = self._get_payload(request)
             if not payload:
                 return self._unauthenticated_response()
@@ -57,11 +55,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # ----------------------------------------------------
         # CASE 2: CHAT QUERY RATE LIMIT
         # ----------------------------------------------------
-        if method == "POST" and (
-            path.startswith("/query") or path == "/rag/query/async"
-        ):
-
-
+        if method == "POST" and self._is_chat_endpoint(path):
             payload = self._get_payload(request)
             if not payload:
                 return self._unauthenticated_response()
@@ -88,6 +82,17 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return response
 
         return await call_next(request)
+
+    def _is_upload_endpoint(self, path: str) -> bool:
+        return path == "/upload" or path.startswith("/files/projects")
+
+    def _is_chat_endpoint(self, path: str) -> bool:
+        normalized_path = (path or "").rstrip("/")
+        return (
+            normalized_path.startswith("/query")
+            or normalized_path.endswith("/query")
+            or normalized_path.endswith("/rag/query/async")
+        )
 
     # --------------------------------------------------------
     # Extract JWT Payload
@@ -130,12 +135,17 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     # Rate Limit Response
     # --------------------------------------------------------
     def _rate_limited_response(self, limit, remaining, retry_after, reason):
+        if reason == "chat":
+            message = f"Chat is limited to {limit} query per hour. Please wait before asking another query."
+        else:
+            message = f"Rate limit exceeded for {reason}. You can only upload {limit} documents in 1 hour"
+
         return JSONResponse(
             status_code=429,
             content={
                 "status": "error",
                 "status_code": 429,
-                "message": f"Rate limit exceeded for {reason}. You can only upload 10 documents in 1 hour",
+                "message": message,
                 "retry_after_seconds": retry_after,
                 "limit": limit,
                 "remaining": remaining,

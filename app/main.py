@@ -28,7 +28,7 @@ from app.middleware.request_id_middleware import request_id_middleware
 from app.core.phoenix_utils import evaluate_rag_interaction
 
 from app.middleware import files_middleware 
-from app.config import settings
+from app.config import settings, normalize_complex_model
 from app.database import create_indexes, chat_history_collection,verify_connection,close_mongo_connection,project_config_collection
 from app.dependencies import UserPayload, get_current_user
 from app.middleware.custom_expection import CustomExceptionMiddleware
@@ -560,7 +560,7 @@ async def query_documents(
             ai_settings = {
                 "router_model": project_config.get("router_model", settings.ROUTER_MODEL),
                 "simple_model": project_config.get("simple_model", settings.LLM_MODEL_SIMPLE),
-                "complex_model": project_config.get("complex_model", settings.LLM_MODEL_COMPLEX),
+                "complex_model": normalize_complex_model(project_config.get("complex_model")),
                 "search_strategy": project_config.get("search_strategy", "hybrid"),
                 "retrieval_depth": project_config.get("retrieval_depth", 5),
                 "enable_reranking": project_config.get("enable_reranking", True),

@@ -39,12 +39,13 @@ _layout_processor = None
 # Maps GPU Index to the Port where that specific Ollama instance is running.
 OLLAMA_GPU_MAP = {
     0: "http://localhost:11434",  # GPU 0 (Light Models + Model Server)
-    1: "http://localhost:11435",  # GPU 1 (Heavy 14B Model)
+    1: "http://localhost:11435",  # GPU 1 (Complex model instance)
     2: "http://localhost:11436"   # GPU 2 (Light Models + Model Server)
 }
 
 # Estimated VRAM usage (MB) for your models
 MODEL_VRAM_REQ = {
+    "gemma:7b": 5500,
     "qwen2.5:7b": 5500,
     "qwen2.5:14b": 11000,
     "qwen2.5:0.5b": 800,
@@ -326,7 +327,8 @@ def load_models():
     # 1. Load Ollama Models with DYNAMIC GPU SELECTION
     try:
         common_args = {"temperature": 0, "keep_alive": "5m"}
-        ephemeral_args = {"temperature": 0, "keep_alive": "0"}
+        # Keep light models warm briefly so routed queries avoid repeated cold starts.
+        ephemeral_args = {"temperature": 0, "keep_alive": "5m"}
 
         # A. ROUTER (Light) -> Scans GPU 0 & 2
         router_url = get_best_ollama_url(settings.ROUTER_MODEL)

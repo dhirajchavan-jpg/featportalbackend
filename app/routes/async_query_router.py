@@ -5,7 +5,7 @@ from app.schemas import QueryRequest, StandardResponse
 from app.services.redis.redis_service import redis_service
 from app.middleware.prompt_validation import get_prompt_validator
 from app.database import project_config_collection
-from app.config import settings
+from app.config import settings, normalize_complex_model
 from app.utils.logger import setup_logger
 from app.middleware import files_middleware
 
@@ -38,7 +38,7 @@ async def submit_async_query(
             ai_settings = {
                 "router_model": project_config.get("router_model", settings.ROUTER_MODEL),
                 "simple_model": project_config.get("simple_model", settings.LLM_MODEL_SIMPLE),
-                "complex_model": project_config.get("complex_model", settings.LLM_MODEL_COMPLEX),
+                "complex_model": normalize_complex_model(project_config.get("complex_model")),
                 "search_strategy": project_config.get("search_strategy", "hybrid"),
                 "retrieval_depth": project_config.get("retrieval_depth", 5),
                 "enable_reranking": project_config.get("enable_reranking", True),

@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     
     # Multi-Model Setup
     LLM_MODEL_SIMPLE: str = "qwen2.5:1.5b-instruct"
-    LLM_MODEL_COMPLEX: str = "qwen2.5:14b"
+    LLM_MODEL_COMPLEX: str = "gemma:7b"
     LLM_MODEL: str = LLM_MODEL_SIMPLE
     
     # Router Model
@@ -153,6 +153,17 @@ class Settings(BaseSettings):
         extra = "ignore" 
 
 settings = Settings()
+
+LEGACY_COMPLEX_MODELS = {"qwen2.5:14b"}
+
+
+def normalize_complex_model(model_name: Optional[str]) -> str:
+    """Map retired complex-model defaults to the current supported default."""
+    if not model_name:
+        return settings.LLM_MODEL_COMPLEX
+    if model_name in LEGACY_COMPLEX_MODELS:
+        return settings.LLM_MODEL_COMPLEX
+    return model_name
 
 # Create necessary directories
 os.makedirs(settings.UPLOAD_DIR, exist_ok=True)

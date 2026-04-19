@@ -27,7 +27,7 @@ def test_project_config_defaults():
 
     assert config.router_model == "qwen2.5:0.5b"
     assert config.simple_model == "qwen2.5:1.5b-instruct"
-    assert config.complex_model == "qwen2.5:14b"
+    assert config.complex_model == "gemma:7b"
     assert config.search_strategy == "hybrid"
     assert config.retrieval_depth == 5
     assert config.enable_reranking is True

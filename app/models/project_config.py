@@ -19,7 +19,7 @@ class ProjectConfig(BaseModel):
     # --- AI Model Selection ---
     router_model: str = Field(default="qwen2.5:0.5b", description="Model used for routing")
     simple_model: str = Field(default="qwen2.5:1.5b-instruct", description="Model for simple queries")
-    complex_model: str = Field(default="qwen2.5:14b", description="Model for complex queries")
+    complex_model: str = Field(default="gemma:7b", description="Model for complex queries")
     
     # --- Search Strategy ---
     search_strategy: str = Field(default="hybrid", description="hybrid, vector, or keyword")
