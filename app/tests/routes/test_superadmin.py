@@ -158,6 +158,49 @@ async def test_upload_global_file(client):
     # Ensure Redis task ID is returned
     assert json_resp["data"]["task_id"] == "job_123"
 
+
+@pytest.mark.asyncio
+async def test_upload_global_docx_skips_paddleocr_health_check(client):
+    fake_file = BytesIO(b"PK\x03\x04 fake docx content")
+    fake_file.name = "test.docx"
+
+    with patch("app.routes.super_admin.magic.from_buffer", return_value="application/zip"), \
+         patch("app.routes.super_admin.get_ocr_engine") as mock_get_ocr:
+        res = await client.post(
+            "/upload-global",
+            data={
+                "sector": "RBI",
+                "document_type": "circular",
+                "category": "banking"
+            },
+            files={"file": ("test.docx", fake_file, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")}
+        )
+
+    assert res.status_code == 202
+    mock_get_ocr.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_upload_global_pdf_still_checks_paddleocr_health(client):
+    fake_file = BytesIO(b"%PDF-1.4 fake content")
+    fake_file.name = "test.pdf"
+    mock_ocr = MagicMock()
+    mock_ocr.is_service_available.return_value = False
+
+    with patch("app.routes.super_admin.get_ocr_engine", return_value=mock_ocr):
+        res = await client.post(
+            "/upload-global",
+            data={
+                "sector": "RBI",
+                "document_type": "circular",
+                "category": "banking"
+            },
+            files={"file": ("test.pdf", fake_file, "application/pdf")}
+        )
+
+    assert res.status_code == 503
+    assert res.json()["detail"] == "PaddleOCR is not available. Please try again later."
+
 @pytest.mark.asyncio
 async def test_get_all_global_files(client, mock_globals):
     # Setup cursor to return one specific file

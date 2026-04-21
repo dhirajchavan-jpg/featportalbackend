@@ -201,8 +201,8 @@ async def get_project_settings(project_id: str):
     defaults = {
         "project_id": project_id,
         "router_model": "qwen2.5:0.5b",
-        "simple_model": "qwen2.5:1.5b-instruct",
-        "complex_model": "gemma:7b",
+        "simple_model": "qwen2.5:7b-instruct-q4_K_M",
+        "complex_model": "qwen2.5:14b",
         "search_strategy": "hybrid",
         "retrieval_depth": 5,
         "enable_reranking": True,

@@ -34,13 +34,13 @@ class Settings(BaseSettings):
     QDRANT_SPARSE_VECTOR_NAME: str = "sparse"  # BM25 scores
 
     # Ollama LLM Settings
-    OLLAMA_BASE_URL: str = "http://localhost:11434"
+    OLLAMA_BASE_URL: str = "http://localhost:11435"
     
     BACKEND_PUBLIC_URL: str = "http://localhost:8072"
     
     # Multi-Model Setup
-    LLM_MODEL_SIMPLE: str = "qwen2.5:1.5b-instruct"
-    LLM_MODEL_COMPLEX: str = "gemma:7b"
+    LLM_MODEL_SIMPLE: str = "qwen2.5:7b-instruct-q4_K_M"
+    LLM_MODEL_COMPLEX: str = "qwen2.5:14b"
     LLM_MODEL: str = LLM_MODEL_SIMPLE
     
     # Router Model

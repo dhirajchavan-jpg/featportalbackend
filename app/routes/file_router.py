@@ -21,6 +21,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _requires_ocr_service(filename: str) -> bool:
+    return os.path.splitext(filename or "")[1].lower() == ".pdf"
+
+
 class CancelRequest(BaseModel):
     task_id: str
 
@@ -76,11 +80,29 @@ async def upload_files_bulk(
                 selected_engine = config_engine
     except Exception:
         selected_engine = "paddleocr"
+    logger.info(
+        "[FileUpload] Upload request received for project=%s. files=%s, selected_engine=%s",
+        project_id,
+        [uploaded_file.filename for uploaded_file in files],
+        selected_engine,
+    )
 
-    if selected_engine == "paddleocr":
+    requires_ocr_check = any(_requires_ocr_service(uploaded_file.filename) for uploaded_file in files)
+    logger.info(
+        "[FileUpload] OCR service check decision. selected_engine=%s, requires_ocr_check=%s",
+        selected_engine,
+        requires_ocr_check,
+    )
+
+    if selected_engine == "paddleocr" and requires_ocr_check:
         ocr_instance = get_ocr_engine()
+        logger.info("[FileUpload] PaddleOCR health check started for project=%s", project_id)
         if not ocr_instance.is_service_available():
+            logger.warning("[FileUpload] PaddleOCR unavailable for project=%s", project_id)
             raise HTTPException(status_code=503, detail="PaddleOCR is not available. Change OCR setting or retry later.")
+        logger.info("[FileUpload] PaddleOCR health check passed for project=%s", project_id)
+    else:
+        logger.info("[FileUpload] OCR health check skipped because uploaded files do not require OCR.")
 
     successful_uploads: List[Dict[str, Any]] = []
     failed_uploads: List[FileUploadErrorData] = []
@@ -98,8 +120,22 @@ async def upload_files_bulk(
         try:
             current_category = categories[i].strip()
             current_compliance_type = compliance_types[i].strip()
+            logger.info(
+                "[FileUpload] Processing file %s/%s: filename=%s, category=%s, compliance_type=%s",
+                i + 1,
+                len(files),
+                uploaded_file.filename,
+                current_category,
+                current_compliance_type,
+            )
 
             _, file_path, file_hash = await files_middleware.save_file(uploaded_file, project_id)
+            logger.info(
+                "[FileUpload] File persisted temporarily. filename=%s, file_path=%s, file_hash=%s",
+                uploaded_file.filename,
+                file_path,
+                file_hash,
+            )
 
             task_id = await files_middleware.run_qdrant_indexing(
                 file_path=file_path,
@@ -112,6 +148,11 @@ async def upload_files_bulk(
                 ocr_engine=selected_engine,
                 file_id=None,
                 file_hash=file_hash
+            )
+            logger.info(
+                "[FileUpload] Background indexing queued. filename=%s, task_id=%s",
+                uploaded_file.filename,
+                task_id,
             )
 
             successful_uploads.append({
@@ -129,6 +170,11 @@ async def upload_files_bulk(
                     pass
 
             error_msg = e.detail if isinstance(e, HTTPException) else str(e)
+            logger.exception(
+                "[FileUpload] Failed to process file. filename=%s, error=%s",
+                uploaded_file.filename,
+                error_msg,
+            )
             failed_uploads.append(FileUploadErrorData(filename=uploaded_file.filename, error=error_msg))
 
     response_data = {"successful_uploads": successful_uploads, "failed_uploads": failed_uploads}

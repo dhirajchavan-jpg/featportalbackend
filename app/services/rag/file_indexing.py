@@ -156,6 +156,7 @@ def process_and_index_global_file(
 ):
     """Process and index a GLOBAL sector file."""
     start_time = time.time()
+    extra_metadata = extra_metadata or {}
     
     logger.info(f"\n{'='*70}")
     logger.info(f"GLOBAL FILE PIPELINE: {original_filename}")
@@ -175,7 +176,7 @@ def process_and_index_global_file(
             file_id=file_id,
             project_id="GLOBAL",
             sector=sector,
-            ocr_engine_name=ocr_engine 
+            ocr_engine_name=ocr_engine,
         )
         
         if 'metadata' not in document_json:
@@ -227,8 +228,7 @@ def process_and_index_global_file(
             "is_global": True,
             "file_name": original_filename
         }
-        if extra_metadata:
-            global_metadata.update(extra_metadata)
+        global_metadata.update(extra_metadata)
         
         if 'file_name' in extra_metadata:
             global_metadata['file_name'] = original_filename

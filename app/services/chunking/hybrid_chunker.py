@@ -52,9 +52,25 @@ class HybridChunker:
         Aggressive cleanup for OCR artifacts common in Indian compliance docs.
         """
         if not text: return ""
+
+        mojibake_map = {
+            "â€™": "'",
+            "â€˜": "'",
+            "â€œ": '"',
+            "â€\x9d": '"',
+            "â€“": "-",
+            "â€”": "-",
+            "â€¢": "-",
+            "â€¦": "...",
+            "Â ": " ",
+            "Â": "",
+            "â‚¹": "Rs.",
+        }
+        for broken, fixed in mojibake_map.items():
+            text = text.replace(broken, fixed)
         
         # 1. Fix Rupee symbol often OCR'd as backtick or '?'
-        text = text.replace("` ", "₹").replace("Rs .", "Rs.")
+        text = text.replace("` ", "Rs. ").replace("Rs .", "Rs.")
         
         # 2. Remove common page footers/headers (e.g., "Page | 10", "Confidential")
         text = re.sub(r'(?i)Page\s*\|?\s*\d+', '', text)
@@ -69,6 +85,28 @@ class HybridChunker:
         text = re.sub(r'\n{3,}', '\n\n', text)
         
         return text.strip()
+
+    def _derive_section_header(self, text: str, fallback: str) -> str:
+        """Infer a better section label from uppercase heading lines."""
+        heading_lines = []
+        for raw_line in text.splitlines():
+            line = raw_line.strip(" :-\t")
+            if len(line) < 4 or len(line) > 120:
+                continue
+            if re.match(r'^(?:\d+(?:\.\d+)*|\([a-z0-9]+\)|[a-z]\))$', line, flags=re.IGNORECASE):
+                continue
+            alpha_chars = [c for c in line if c.isalpha()]
+            if not alpha_chars:
+                continue
+            uppercase_ratio = sum(1 for c in alpha_chars if c.isupper()) / len(alpha_chars)
+            if uppercase_ratio >= 0.7:
+                heading_lines.append(line)
+
+        if not heading_lines:
+            return fallback
+        if len(heading_lines) >= 2:
+            return " / ".join(heading_lines[-2:])
+        return heading_lines[-1]
 
     def chunk_document(self, document_json: Dict[str, Any]) -> List[Document]:
         """
@@ -90,7 +128,7 @@ class HybridChunker:
         file_context_str = f"File: {file_name}"
 
         for page in pages:
-            page_num = page.get('page_number', 1)
+            page_num = page.get('page_number')
             raw_text = page.get('text_content', '')
             page_text = self._clean_text(raw_text)
             
@@ -190,6 +228,10 @@ class HybridChunker:
             local_definition_context = preamble_text
             # We do NOT save it as a separate chunk yet. We save it to inject later.
         elif preamble_text:
+            section_tracker['current_header'] = self._derive_section_header(
+                preamble_text,
+                section_tracker['current_header']
+            )
             # It's just normal text from the previous page, chunk it normally
             context_str = f"{file_context_str} > Section: {section_tracker['current_header']}"
             chunks.extend(self._create_chunks(preamble_text, context_str, page_num, base_metadata, "continuation"))
@@ -208,6 +250,11 @@ class HybridChunker:
                 # Reset local definition context if we hit a major new section
                 local_definition_context = "" 
                 section_tracker['current_header'] = f"{header_marker} {first_line_title}".strip()
+            elif content.strip():
+                section_tracker['current_header'] = self._derive_section_header(
+                    content,
+                    section_tracker['current_header']
+                )
             
             # Combine Marker + Content
             full_clause = header_marker + " " + content
@@ -242,15 +289,21 @@ class HybridChunker:
             sub_docs = self.recursive_chunker.create_documents([text])
             docs = []
             for i, d in enumerate(sub_docs):
+                chunk_metadata = {**meta, 'chunk_method': f"{method}_split"}
+                if page is not None:
+                    chunk_metadata['page'] = page
                 docs.append(Document(
                     page_content=f"{context} (Part {i+1})\n{d.page_content}",
-                    metadata={**meta, 'page': page, 'chunk_method': f"{method}_split"}
+                    metadata=chunk_metadata
                 ))
             return docs
         else:
+            chunk_metadata = {**meta, 'chunk_method': method}
+            if page is not None:
+                chunk_metadata['page'] = page
             return [Document(
                 page_content=f"{context}\n{text}",
-                metadata={**meta, 'page': page, 'chunk_method': method}
+                metadata=chunk_metadata
             )]
 
     def _chunk_tables(self, tables: List[Dict], page_num: int, base_metadata: Dict, file_context_str: str) -> List[Document]:
@@ -261,16 +314,18 @@ class HybridChunker:
             if len(md_text) < 10: continue
             
             final_content = f"{file_context_str} > Table Data:\n{md_text}"
+            chunk_metadata = {
+                **base_metadata,
+                'table_index': table_idx,
+                'content_type': 'table',
+                'chunk_method': 'table_markdown'
+            }
+            if page_num is not None:
+                chunk_metadata['page'] = page_num
             
             chunks.append(Document(
                 page_content=final_content,
-                metadata={
-                    **base_metadata,
-                    'page': page_num,
-                    'table_index': table_idx,
-                    'content_type': 'table',
-                    'chunk_method': 'table_markdown'
-                }
+                metadata=chunk_metadata
             ))
         return chunks
 
@@ -283,13 +338,18 @@ class HybridChunker:
             if headers:
                 lines.append("| " + " | ".join(str(h).replace('\n', ' ') for h in headers) + " |")
                 lines.append("| " + " | ".join(['---'] * len(headers)) + " |")
+            non_empty_rows = 0
             for row in data:
                 if isinstance(row, dict):
                     vals = [str(row.get(h, '')).replace('\n', ' ') for h in headers]
                 elif isinstance(row, list):
                     vals = [str(v).replace('\n', ' ') for v in row]
                 else: continue
+                if any(v.strip() for v in vals):
+                    non_empty_rows += 1
                 lines.append("| " + " | ".join(vals) + " |")
+            if headers and non_empty_rows == 0:
+                return ""
             return "\n".join(lines)
         except Exception:
             return ""
@@ -300,7 +360,9 @@ class HybridChunker:
             docs = self.semantic_chunker.create_documents([text])
             for d in docs:
                 d.page_content = context_prefix + d.page_content
-                d.metadata.update({**base_metadata, 'page': page_num, 'chunk_method': 'semantic'})
+                d.metadata.update({**base_metadata, 'chunk_method': 'semantic'})
+                if page_num is not None:
+                    d.metadata['page'] = page_num
             return docs
         except Exception:
             return self._chunk_recursively(text, page_num, base_metadata, context_prefix)
@@ -310,7 +372,9 @@ class HybridChunker:
         docs = self.recursive_chunker.create_documents([text])
         for d in docs:
             d.page_content = context_prefix + d.page_content
-            d.metadata.update({**base_metadata, 'page': page_num, 'chunk_method': 'recursive'})
+            d.metadata.update({**base_metadata, 'chunk_method': 'recursive'})
+            if page_num is not None:
+                d.metadata['page'] = page_num
         return docs
 
     def _generate_embeddings_batched(self, chunks: List[Document], batch_size=50):

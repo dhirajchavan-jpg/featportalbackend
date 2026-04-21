@@ -61,12 +61,21 @@ def test_clean_text(chunker):
     
     # Assertions based on _clean_text logic
     assert "Page | 10" not in cleaned
-    # FIX: Code replaces "` " (backtick+space) with "₹", so "₹500" (no space) is correct
-    assert "₹500" in cleaned  
+    assert "Rs. 500" in cleaned
     assert "Rs. 1000" in cleaned # Rs . fixed
     assert "brokenword" in cleaned # Hyphen merged
     assert "123" not in cleaned # Floating integer removed (if on own line)
     assert "\n\n\n" not in cleaned # Max 2 newlines
+
+
+def test_clean_text_fixes_common_mojibake(chunker):
+    raw_text = "Employeesâ€™ rights include 3â€“5 days of leave and â€œquoted textâ€\x9d."
+
+    cleaned = chunker._clean_text(raw_text)
+
+    assert "Employees' rights" in cleaned
+    assert "3-5" in cleaned
+    assert '"quoted text"' in cleaned
 
 def test_table_to_markdown(chunker):
     """Test JSON table to Markdown conversion."""
@@ -99,6 +108,16 @@ def test_chunk_tables(chunker):
     assert "Table Data" in chunks[0].page_content
     assert "| H1 |" in chunks[0].page_content
     assert chunks[0].metadata['content_type'] == "table"
+
+
+def test_chunk_tables_skips_empty_header_only_tables(chunker):
+    tables = [{
+        "headers": ["Outcome", "Action"],
+        "data": []
+    }]
+    chunks = chunker._chunk_tables(tables, 1, {"file_name": "test.pdf"}, "File: test.pdf")
+
+    assert chunks == []
 
 def test_chunk_by_legal_clauses_basic(chunker):
     """Test regex splitting on standard legal headers."""
@@ -223,6 +242,39 @@ def test_chunk_document_full_flow(chunker):
     # Validate Embeddings were generated
     # The mock embedder adds 'dense_embedding' to metadata
     assert 'dense_embedding' in chunks[0].metadata
+
+
+def test_docx_native_chunks_preserve_real_page_metadata(chunker):
+    text_content = "POLICY OVERVIEW\nThis handbook explains the company policies in detail. " * 3
+
+    chunks = chunker.chunk_document({
+        "metadata": {"file_name": "policy.docx", "page_numbering": "physical_docx"},
+        "pages": [{
+            "page_number": 3,
+            "text_content": text_content,
+            "tables": []
+        }]
+    })
+
+    assert len(chunks) > 0
+    assert all(chunk.metadata["page"] == 3 for chunk in chunks)
+
+
+def test_uppercase_headings_improve_section_context(chunker):
+    text = """
+    EMPLOYEE ENGAGEMENT
+    RECOGNITION & REWARDS
+    Objective
+    To build a culture of appreciation.
+    1. Eligibility.
+    All employees are eligible.
+    """
+
+    section_tracker = {"current_header": "Preamble / Introduction", "last_clause_index": 0}
+    chunks = chunker._chunk_by_legal_clauses(text, 2, {}, "File: handbook.pdf", section_tracker)
+
+    assert len(chunks) > 0
+    assert "EMPLOYEE ENGAGEMENT / RECOGNITION & REWARDS" in chunks[0].page_content
 
 def test_generate_embeddings_batched(chunker, mock_embeddings):
     """Test batch embedding generation."""

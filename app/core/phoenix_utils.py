@@ -12,7 +12,7 @@ logger = setup_logger()
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
-OLLAMA_BASE_URL = "http://localhost:11434"
+OLLAMA_BASE_URL = "http://localhost:11435"
 EVAL_MODEL = "phi3"
 
 def evaluate_rag_interaction(

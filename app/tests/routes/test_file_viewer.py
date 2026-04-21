@@ -86,6 +86,8 @@ def test_get_file_path_success(client, file_doc):
 
     assert response.status_code == 200
     assert response.json()["file_url"] == "http://localhost:8009/files/view/file123?token=token123"
+    assert response.json()["file_type"] == ".pdf"
+    assert response.json()["filename"] == "test_file.pdf"
 
 
 def test_get_file_path_not_found(client):
@@ -109,8 +111,45 @@ def test_view_file_success(client, file_doc):
 
     assert response.status_code == 200
     assert response.headers["content-type"] == "application/pdf"
-    assert response.headers["content-disposition"] == "inline"
+    assert response.headers["content-disposition"] == 'inline; filename="test_file.pdf"'
     assert response.content == b"PDF DATA"
+
+
+def test_view_file_docx_uses_docx_mime_and_attachment(client):
+    file_doc = {
+        "_id": ObjectId(),
+        "file_id": "file456",
+        "filename": "handbook.docx",
+        "file_path": "/fake/path/handbook.docx",
+    }
+
+    with patch("app.routes.file_viewer.Global_file_collection.find_one", AsyncMock(return_value=file_doc)), patch(
+        "app.routes.file_viewer.resolve_physical_path", return_value="/fake/path/handbook.docx"
+    ), patch("builtins.open", mock_open(read_data=b"DOCX DATA")):
+        response = client.get("/files/view/file456?token=token123")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    assert response.headers["content-disposition"] == 'attachment; filename="handbook.docx"'
+    assert response.content == b"DOCX DATA"
+
+
+def test_view_file_uses_path_extension_when_db_filename_has_no_extension(client):
+    file_doc = {
+        "_id": ObjectId(),
+        "file_id": "file789",
+        "filename": "handbook",
+        "file_path": "/fake/path/handbook.docx",
+    }
+
+    with patch("app.routes.file_viewer.Global_file_collection.find_one", AsyncMock(return_value=file_doc)), patch(
+        "app.routes.file_viewer.resolve_physical_path", return_value="/fake/path/handbook.docx"
+    ), patch("builtins.open", mock_open(read_data=b"DOCX DATA")):
+        response = client.get("/files/view/file789?token=token123")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    assert response.headers["content-disposition"] == 'attachment; filename="handbook.docx"'
 
 
 def test_view_file_db_record_missing(client):

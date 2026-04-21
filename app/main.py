@@ -1,4 +1,5 @@
 # app/main.py
+import json
 import os
 import asyncio
 import time
@@ -173,6 +174,25 @@ def count_total_api_routes(app: FastAPI):
             })
 
     return len(routes)
+
+
+def _chunk_sort_key(chunk: dict):
+    """Sort chunks deterministically for export/review."""
+    page_value = chunk.get("page_number")
+    if page_value is None:
+        page_value = chunk.get("page")
+    if isinstance(page_value, int):
+        normalized_page = page_value
+    else:
+        normalized_page = 10**9
+
+    return (
+        str(chunk.get("source") or ""),
+        str(chunk.get("file_name") or ""),
+        normalized_page,
+        str(chunk.get("chunk_id") or ""),
+        str(chunk.get("point_id") or ""),
+    )
 
 
 # Analytics endpoint for React dashboard
@@ -402,7 +422,7 @@ async def upload_document(
     unique_filename = f"{file_id}-{safe_filename}"
     permanent_file_path = os.path.join(settings.UPLOAD_DIR, unique_filename)
 
-    temp_file = tempfile.NamedTemporaryFile(delete=False)
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=file_extension)
     temp_file_path = temp_file.name
 
     try:
@@ -707,7 +727,7 @@ def export_chunks(source: str):
     if not qdrant:
         raise HTTPException(500, "Qdrant client not initialized")
 
-    collection_name = "my_private_documents"
+    collection_name = settings.QDRANT_COLLECTION_NAME
 
     chunks = []
     offset = 0
@@ -720,7 +740,9 @@ def export_chunks(source: str):
         result = qdrant.scroll(
             collection_name=collection_name,
             limit=limit,
-            offset=offset
+            offset=offset,
+            with_payload=True,
+            with_vectors=False
         )
 
         # unpack safely
@@ -751,7 +773,85 @@ def export_chunks(source: str):
         # move forward
         offset = next_offset
 
+    chunks.sort(key=_chunk_sort_key)
+
     return {"total": len(chunks), "chunks": chunks}
+
+
+@app.get("/debug/export-all-chunks/download")
+def download_all_chunks_json():
+    qdrant = get_qdrant_client()
+    if not qdrant:
+        raise HTTPException(500, "Qdrant client not initialized")
+
+    collection_name = settings.QDRANT_COLLECTION_NAME
+    chunks = []
+    offset = None
+    limit = 200
+
+    while True:
+        result = qdrant.scroll(
+            collection_name=collection_name,
+            limit=limit,
+            offset=offset,
+            with_payload=True,
+            with_vectors=False
+        )
+
+        if isinstance(result, tuple) and len(result) == 2:
+            points, next_offset = result
+        else:
+            points = result
+            next_offset = None
+
+        if not points:
+            break
+
+        for p in points:
+            payload = p.payload or {}
+            metadata = payload.get("metadata", {})
+            chunks.append({
+                "point_id": str(p.id),
+                "chunk_id": metadata.get("chunk_id"),
+                "source": metadata.get("source"),
+                "project_id": metadata.get("project_id"),
+                "sector": metadata.get("sector"),
+                "owner_id": metadata.get("owner_id"),
+                "file_name": metadata.get("file_name"),
+                "page_number": metadata.get("page_number"),
+                "chunk_type": metadata.get("chunk_type"),
+                "is_global": metadata.get("is_global"),
+                "text": payload.get("page_content")
+            })
+
+        if next_offset is None or next_offset == offset:
+            break
+
+        offset = next_offset
+
+    chunks.sort(key=_chunk_sort_key)
+
+    export_dir = os.path.join("data", "json_outputs")
+    os.makedirs(export_dir, exist_ok=True)
+    export_path = os.path.join(export_dir, f"{collection_name}_chunks.json")
+
+    with open(export_path, "w", encoding="utf-8") as export_file:
+        json.dump(
+            {
+                "collection_name": collection_name,
+                "total": len(chunks),
+                "chunks": chunks
+            },
+            export_file,
+            ensure_ascii=False,
+            indent=2
+        )
+
+    return FileResponse(
+        path=export_path,
+        media_type="application/json",
+        filename=f"{collection_name}_chunks.json"
+    )
 
 
 

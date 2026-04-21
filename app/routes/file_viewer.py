@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from fastapi.responses import StreamingResponse, JSONResponse
 from bson import ObjectId
 import os
+import mimetypes
 from pydantic import BaseModel
 from app.config import settings
 
@@ -12,6 +13,47 @@ from app.utils.logger import setup_logger
 
 logger = setup_logger()
 router = APIRouter(tags=["File Viewer"])
+
+INLINE_EXTENSIONS = {".pdf", ".txt"}
+
+
+def get_file_serving_metadata(path: str, filename: str = ""):
+    path_name = os.path.basename(path or "")
+    detected_name = filename or path_name
+    extension = os.path.splitext(detected_name)[1].lower()
+    if not extension and path_name:
+        extension = os.path.splitext(path_name)[1].lower()
+        if extension:
+            logger.info(
+                "[FileViewer] Filename '%s' had no extension. Falling back to path-derived extension '%s' from '%s'.",
+                detected_name,
+                extension,
+                path_name,
+            )
+            detected_name = detected_name if os.path.splitext(detected_name)[1].lower() else f"{detected_name}{extension}"
+
+    media_type_map = {
+        ".pdf": "application/pdf",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".txt": "text/plain",
+    }
+
+    media_type = media_type_map.get(extension) or mimetypes.guess_type(detected_name)[0] or "application/octet-stream"
+    disposition_type = "inline" if extension in INLINE_EXTENSIONS else "attachment"
+
+    logger.info(
+        "[FileViewer] Serving metadata resolved. filename=%s, extension=%s, media_type=%s, disposition=%s",
+        detected_name,
+        extension or "unknown",
+        media_type,
+        disposition_type,
+    )
+    return {
+        "filename": detected_name,
+        "extension": extension,
+        "media_type": media_type,
+        "content_disposition": f'{disposition_type}; filename="{detected_name}"',
+    }
 
 
 def resolve_physical_path(raw_path: str):
@@ -154,8 +196,16 @@ async def get_file_path(
     token = auth_header.replace("Bearer ", "") if "Bearer " in auth_header else ""
     base_url = settings.BACKEND_PUBLIC_URL.rstrip("/")
     secure_url = f"{base_url}/files/view/{file_id}?token={token}"
-    logger.info(f"Generated secure file URL: {secure_url}")
-    return {"file_url": secure_url}
+    file_name = payload.filename or file_doc.get("filename") or ""
+    serving_meta = get_file_serving_metadata(file_doc.get("file_path") or file_name, file_name)
+    logger.info(
+        "[FileViewer] Generated secure file URL. filename=%s, file_id=%s, file_type=%s, url=%s",
+        file_name,
+        file_id,
+        serving_meta["extension"] or "unknown",
+        secure_url,
+    )
+    return {"file_url": secure_url, "file_type": serving_meta["extension"], "filename": file_name}
 
 
 @router.get("/files/view/{file_id}")
@@ -188,6 +238,17 @@ async def view_file(
         logger.error(f"ERROR: File '{raw_path}' not found on disk (Checked variations).")
         raise HTTPException(status_code=404, detail="File content not found on server")
 
+    file_name = file_doc.get("filename") or os.path.basename(final_path)
+    serving_meta = get_file_serving_metadata(final_path, file_name)
+    logger.info(
+        "[FileViewer] Opening citation file. requested_file_id=%s, filename=%s, final_path=%s, media_type=%s, content_disposition=%s",
+        file_id,
+        file_name,
+        final_path,
+        serving_meta["media_type"],
+        serving_meta["content_disposition"],
+    )
+
     def iter_file():
         with open(final_path, "rb") as file_handle:
             while chunk := file_handle.read(8192):
@@ -195,6 +256,6 @@ async def view_file(
 
     return StreamingResponse(
         iter_file(),
-        media_type="application/pdf",
-        headers={"Content-Disposition": "inline"},
+        media_type=serving_meta["media_type"],
+        headers={"Content-Disposition": serving_meta["content_disposition"]},
     )

@@ -45,9 +45,9 @@ def setup_logger():
 logger = setup_logger()
 # --- CONFIGURATION ---
 INSTANCES = [
-    {"port": 11434, "gpu": 0},
-    {"port": 11435, "gpu": 1},
-    {"port": 11436, "gpu": 2}
+    {"port": 11435, "gpu": 0},
+    {"port": 11436, "gpu": 1},
+    {"port": 11437, "gpu": 2}
 ]
 processes = []
 def is_port_in_use(port):

@@ -130,11 +130,38 @@ def test_process_and_index_metadata_injection(mock_services, mock_user):
         assert doc_json["metadata"]["file_name"] == "my_doc.pdf"
         assert doc_json["metadata"]["project_id"] == "proj_1"
 
+
+def test_process_and_index_file_docx_preserves_metadata(mock_services, mock_user):
+    mock_services["processor"].process_document.return_value = {
+        "pages": [{"page_number": 1, "text_content": "Handbook", "metadata": {}}],
+        "metadata": {"source": "handbook.docx", "ocr_engine": "none", "extraction_method": "docx_native"},
+    }
+
+    result = process_and_index_file(
+        file_path="/tmp/handbook.docx",
+        project_id="proj_1",
+        sector="HR",
+        current_user=mock_user,
+        original_filename="handbook.docx"
+    )
+
+    assert result["success"] is True
+    mock_services["processor"].process_document.assert_called_with(
+        file_path="/tmp/handbook.docx",
+        file_id=ANY,
+        project_id="proj_1",
+        sector="HR",
+        ocr_engine_name="paddleocr"
+    )
+
+    chunk_args = mock_services["indexer"].index_documents.call_args.kwargs
+    assert chunk_args["extra_metadata"]["file_name"] == "handbook.docx"
+    assert chunk_args["extra_metadata"]["project_id"] == "proj_1"
+
 # --- Tests: Global File Indexing ---
 
 def test_process_and_index_global_file_success(mock_services):
     """Test indexing of global documents."""
-    # FIX: Pass extra_metadata={} to avoid NoneType error in source code
     result = process_and_index_global_file(
         file_path="/tmp/global.pdf",
         sector="Healthcare",
@@ -152,6 +179,25 @@ def test_process_and_index_global_file_success(mock_services):
     extra_meta = call_args.kwargs['extra_metadata']
     assert extra_meta["is_global"] is True
     assert extra_meta["file_name"] == "global.pdf"
+
+
+def test_process_and_index_global_file_docx_uses_native_paginated_processing(mock_services):
+    result = process_and_index_global_file(
+        file_path="/tmp/global.docx",
+        sector="Healthcare",
+        file_id="global_1",
+        original_filename="global.docx",
+        extra_metadata={}
+    )
+
+    assert result["success"] is True
+    mock_services["processor"].process_document.assert_called_with(
+        file_path="/tmp/global.docx",
+        file_id="global_1",
+        project_id="GLOBAL",
+        sector="Healthcare",
+        ocr_engine_name="paddleocr"
+    )
 
 # --- Tests: Management Functions ---
 

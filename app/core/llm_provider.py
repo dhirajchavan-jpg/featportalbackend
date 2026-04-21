@@ -38,15 +38,16 @@ _layout_processor = None
 # --- NEW: OLLAMA MULTI-GPU MAPPING ---
 # Maps GPU Index to the Port where that specific Ollama instance is running.
 OLLAMA_GPU_MAP = {
-    0: "http://localhost:11434",  # GPU 0 (Light Models + Model Server)
-    1: "http://localhost:11435",  # GPU 1 (Complex model instance)
-    2: "http://localhost:11436"   # GPU 2 (Light Models + Model Server)
+    0: "http://localhost:11435",  # GPU 0 (Light Models + Model Server)
+    1: "http://localhost:11436",  # GPU 1 (Complex model instance)
+    2: "http://localhost:11437"   # GPU 2 (Light Models + Model Server)
 }
 
 # Estimated VRAM usage (MB) for your models
 MODEL_VRAM_REQ = {
     "gemma:7b": 5500,
     "qwen2.5:7b": 5500,
+    "qwen2.5:7b-instruct-q4_k_m": 5500,
     "qwen2.5:14b": 11000,
     "qwen2.5:0.5b": 800,
     "llama3": 5500,

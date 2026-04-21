@@ -88,6 +88,7 @@ def test_process_document_flow(processor, mock_components, mock_settings):
         # Metadata check
         assert result["metadata"]["file_id"] == "file_123"
         assert result["metadata"]["ocr_engine"] == "easyocr"
+        assert result["metadata"]["extraction_method"] == "ocr_pdf"
         assert result["metadata"]["total_pages"] == 1
         assert result["metadata"]["has_formulas"] is True
         
@@ -106,6 +107,118 @@ def test_process_document_flow(processor, mock_components, mock_settings):
         assert result["document_structure"]["title"] == "Test Doc"
         assert len(result["pages"]) == 1
         assert len(result["tables"]) == 1
+
+
+def test_process_document_docx_uses_native_extractor(processor, mock_components, mock_settings):
+    layout, ocr, table, formula = mock_components
+
+    processor.docx_extractor = MagicMock()
+    processor.docx_extractor.extract_docx.return_value = {
+        "pages": [{
+            "layout_elements": [],
+            "page_number": 1,
+            "text_content": "Handbook Intro",
+            "ocr_confidence": 0.0,
+            "tables": [],
+            "sections": [{"type": "heading", "text": "Handbook Intro", "elements": []}],
+        }],
+        "tables": [],
+        "document_structure": {
+            "title": "Handbook Intro",
+            "sections": [{"page": 1, "type": "heading", "text": "Handbook Intro"}],
+            "has_toc": False,
+            "section_hierarchy": []
+        },
+        "metadata": {
+            "ocr_engine": "none",
+            "extraction_method": "docx_native_paginated",
+            "total_pages": 1,
+            "total_tables": 0,
+            "page_numbering": "physical_docx",
+        },
+    }
+    formula.process_text_with_formulas.return_value = {
+        "text": "Handbook Intro",
+        "formulas": [],
+        "formula_count": 0
+    }
+
+    with patch("os.makedirs"), patch("builtins.open", mock_open()):
+        result = processor.process_document(
+            file_path="/data/test.docx",
+            file_id="docx_123",
+            project_id="proj_1",
+            sector="HR",
+            ocr_engine_name="paddleocr"
+        )
+
+    processor.docx_extractor.extract_docx.assert_called_once_with("/data/test.docx")
+    layout.detect_from_pdf.assert_not_called()
+    table.extract_tables_from_pdf.assert_not_called()
+    ocr.extract_text_from_pdf.assert_not_called()
+    assert result["metadata"]["ocr_engine"] == "none"
+    assert result["metadata"]["extraction_method"] == "docx_native_paginated"
+    assert result["metadata"]["total_pages"] == 1
+    assert result["metadata"]["page_numbering"] == "physical_docx"
+    assert result["pages"][0]["text_content"] == "Handbook Intro"
+
+def test_process_document_docx_preserves_extracted_page_numbers(processor, mock_components, mock_settings):
+    _, ocr, table, formula = mock_components
+    processor.docx_extractor = MagicMock()
+    processor.docx_extractor.extract_docx.return_value = {
+        "pages": [
+            {
+                "page_number": 1,
+                "layout_elements": [],
+                "text_content": "Page one",
+                "ocr_confidence": 0.0,
+                "tables": [],
+                "sections": [{"type": "heading", "text": "Page one", "elements": []}],
+            },
+            {
+                "page_number": 2,
+                "layout_elements": [],
+                "text_content": "Page two",
+                "ocr_confidence": 0.0,
+                "tables": [],
+                "sections": [{"type": "heading", "text": "Page two", "elements": []}],
+            },
+        ],
+        "tables": [],
+        "document_structure": {
+            "title": "Page one",
+            "sections": [
+                {"page": 1, "type": "heading", "text": "Page one"},
+                {"page": 2, "type": "heading", "text": "Page two"},
+            ],
+            "has_toc": False,
+            "section_hierarchy": [],
+        },
+        "metadata": {
+            "ocr_engine": "none",
+            "extraction_method": "docx_native_paginated",
+            "total_pages": 2,
+            "total_tables": 0,
+            "page_numbering": "physical_docx",
+        },
+    }
+    formula.process_text_with_formulas.side_effect = [
+        {"text": "Page one", "formulas": [], "formula_count": 0},
+        {"text": "Page two", "formulas": [], "formula_count": 0},
+    ]
+
+    with patch("os.makedirs"), patch("builtins.open", mock_open()):
+        result = processor.process_document(
+            file_path="/data/test.docx",
+            file_id="docx_123",
+            project_id="proj_1",
+            sector="HR",
+            ocr_engine_name="paddleocr"
+        )
+
+    ocr.extract_text_from_pdf.assert_not_called()
+    assert [p["page_number"] for p in result["pages"]] == [1, 2]
+    assert result["document_structure"]["sections"][1]["page"] == 2
 
 def test_build_pages_logic(processor, mock_components):
     """Test merging of OCR, Layout, and Tables into page objects."""

@@ -127,6 +127,55 @@ def test_bulk_upload_success(client, upload_file, mock_project, file_model):
     assert response.json()["status"] == "success"
 
 
+def test_bulk_upload_docx_skips_paddleocr_health_check(client, mock_project, file_model):
+    mock_db = MagicMock()
+    mock_db.project_configs.find_one = AsyncMock(return_value={"ocr_engine": "paddleocr"})
+    docx_file = ("files", ("handbook.docx", b"docx content", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"))
+
+    with patch("app.routes.file_router.db", mock_db), \
+         patch("app.routes.file_router.get_ocr_engine") as mock_get_ocr, \
+         patch.object(files_middleware, "verify_project", AsyncMock(return_value=mock_project)), \
+         patch.object(files_middleware, "save_file", AsyncMock(return_value=("handbook.docx", "/tmp/handbook.docx", "hash"))), \
+         patch.object(files_middleware, "run_qdrant_indexing", AsyncMock()), \
+         patch.object(files_middleware, "store_file_metadata", AsyncMock(return_value=file_model)), \
+         patch("asyncio.create_task", lambda coro: coro):
+
+        response = client.post(
+            "/projects/proj1/files",
+            files=[docx_file],
+            data={
+                "categories": ["Organization"],
+                "compliance_types": ["Policy"]
+            }
+        )
+
+    assert response.status_code in [200, 201]
+    assert response.json()["status"] == "success"
+    mock_get_ocr.assert_not_called()
+
+
+def test_bulk_upload_pdf_still_requires_paddleocr_when_selected(client, upload_file, mock_project):
+    mock_db = MagicMock()
+    mock_db.project_configs.find_one = AsyncMock(return_value={"ocr_engine": "paddleocr"})
+    mock_ocr = MagicMock()
+    mock_ocr.is_service_available.return_value = False
+
+    with patch("app.routes.file_router.db", mock_db), \
+         patch("app.routes.file_router.get_ocr_engine", return_value=mock_ocr), \
+         patch.object(files_middleware, "verify_project", AsyncMock(return_value=mock_project)):
+        response = client.post(
+            "/projects/proj1/files",
+            files=[upload_file],
+            data={
+                "categories": ["Organization"],
+                "compliance_types": ["Policy"]
+            }
+        )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "PaddleOCR is not available. Change OCR setting or retry later."
+
+
 def test_bulk_upload_category_mismatch(client, upload_file):
     response = client.post(
         "/projects/proj1/files",

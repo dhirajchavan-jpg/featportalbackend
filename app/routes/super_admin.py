@@ -39,6 +39,10 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 router = APIRouter()
 
+
+def _requires_ocr_service(filename: str) -> bool:
+    return os.path.splitext(filename or "")[1].lower() == ".pdf"
+
 ALLOWED_DOCUMENT_TYPES = [
     "circular",
     "guidelines"
@@ -258,20 +262,32 @@ async def upload_global_sector_file(
     
     # 10. CHECK OCR AVAILABILITY
     selected_engine = "paddleocr" 
-    
-    if selected_engine == "paddleocr":
+    requires_ocr_check = _requires_ocr_service(file.filename)
+    logger.info(
+        "[ADMIN] OCR service check decision for global upload. filename=%s, selected_engine=%s, requires_ocr_check=%s",
+        file.filename,
+        selected_engine,
+        requires_ocr_check,
+    )
+
+    if selected_engine == "paddleocr" and requires_ocr_check:
         ocr_engine = get_ocr_engine()
+        logger.info("[ADMIN] PaddleOCR health check started for global file: %s", file.filename)
         if not ocr_engine.is_service_available():
             # Cleanup file if OCR is dead
             try:
                 os.unlink(permanent_file_path)
             except:
                 pass
+            logger.warning("[ADMIN] PaddleOCR unavailable for global file: %s", file.filename)
             
             raise HTTPException(
                 status_code=503,
                 detail="PaddleOCR is not available. Please try again later."
             )
+        logger.info("[ADMIN] PaddleOCR health check passed for global file: %s", file.filename)
+    else:
+        logger.info("[ADMIN] OCR health check skipped for global file: %s", file.filename)
     
     # -------------------------------------------------------------
     # 11. SAVE METADATA (MONGO) & ENQUEUE (REDIS)

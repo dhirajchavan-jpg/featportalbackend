@@ -251,7 +251,7 @@ class HybridIndexer:
             # Handle 'page' vs 'page_number' mismatch
             raw_page = chunk_metadata.get('page')
             if raw_page is None:
-                raw_page = chunk_metadata.get('page_number', 1)
+                raw_page = chunk_metadata.get('page_number')
             
             # Build final metadata dict
             metadata = {
