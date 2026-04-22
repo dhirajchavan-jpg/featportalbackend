@@ -85,7 +85,7 @@ def test_get_file_path_success(client, file_doc):
         )
 
     assert response.status_code == 200
-    assert response.json()["file_url"] == "http://localhost:8009/files/view/file123?token=token123"
+    assert response.json()["file_url"] == "http://122.170.2.205:8072/files/view/file123?token=token123"
     assert response.json()["file_type"] == ".pdf"
     assert response.json()["filename"] == "test_file.pdf"
 

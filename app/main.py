@@ -141,7 +141,7 @@ async def lifespan(app: FastAPI):
     await close_mongo_connection()
 
 app = FastAPI(
-    title="Secure Compliance RAG API", 
+    title="Feat HR Portal", 
     version="3.0.0",
     lifespan=lifespan
 )

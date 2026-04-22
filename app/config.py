@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     # NEW: REDIS SETTINGS (For Async Queue)
     # =========================================================
     REDIS_HOST: str = "localhost"
-    REDIS_PORT: int = 6382
+    REDIS_PORT: int = 6381
     REDIS_DB: int = 0
     REDIS_QUEUE_NAME: str = "rag_query_queue"
     REDIS_RESULT_TTL: int = 3600  # Results expire after 1 hour
@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     # Ollama LLM Settings
     OLLAMA_BASE_URL: str = "http://localhost:11435"
     
-    BACKEND_PUBLIC_URL: str = "http://localhost:8072"
+    BACKEND_PUBLIC_URL: str = "http://122.170.2.205:8072"
     
     # Multi-Model Setup
     LLM_MODEL_SIMPLE: str = "qwen2.5:7b-instruct-q4_K_M"
@@ -131,7 +131,7 @@ class Settings(BaseSettings):
     )
 
     # Change the fallback to 8072 to match your actual backend port
-    BACKEND_PUBLIC_URL: str = "http://localhost:8072"
+    BACKEND_PUBLIC_URL: str = "http://122.170.2.205:8072"
 
     @property
     def model_server_urls_list(self) -> List[str]:
