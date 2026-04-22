@@ -41,6 +41,8 @@ from app.services.context_manager import get_context_manager
 tracer = trace.get_tracer(__name__)
 logger = logging.getLogger(__name__)
 
+PER_SECTOR_CHUNK_LIMIT = 5
+
 
 async def _normalize_response(text: str, llm_instance: Any) -> str:
     """
@@ -103,7 +105,7 @@ async def query_rag_pipeline(
     project_id: str,
     sectors: Optional[List[str]] = None,
     comparative_mode: bool = True,
-    results_per_sector: int = 3,
+    results_per_sector: int = PER_SECTOR_CHUNK_LIMIT,
     excluded_files: Optional[List[str]] = None,
     style: Optional[str] = "Detailed",
     top_k: int = 5,
@@ -124,6 +126,7 @@ async def query_rag_pipeline(
 
     logger.info(f" [INIT] Pipeline Started | Project: {project_id} | User: {current_user.user_id}")
     history_limit = 5
+    results_per_sector = PER_SECTOR_CHUNK_LIMIT
     
     # --- 0. APPLY CONFIGURATION OVERRIDES ---
     if ai_config:
@@ -132,9 +135,9 @@ async def query_rag_pipeline(
         # 1. Retrieval Depth
         if "retrieval_depth" in ai_config:
             top_k = ai_config["retrieval_depth"]
-            # Adjust per-sector results loosely based on total top_k
-            results_per_sector = max(3, int(top_k / 2)) 
-            logger.info(f" Top-K set to: {top_k} (Per Sector: {results_per_sector})")
+            logger.info(
+                f" Top-K requested: {top_k} (Per Sector enforced to {results_per_sector})"
+            )
 
         if "chat_history_limit" in ai_config:
             history_limit = ai_config["chat_history_limit"]

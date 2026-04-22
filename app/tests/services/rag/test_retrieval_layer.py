@@ -251,7 +251,7 @@ async def test_pipeline_fallback_on_llm_error(mock_dependencies, mock_user):
 
 @pytest.mark.asyncio
 async def test_pipeline_config_overrides(mock_dependencies, mock_user):
-    """Test that ai_config passes parameters correctly."""
+    """Test that ai_config keeps the per-sector chunk cap fixed at 5."""
     deps = mock_dependencies
     
     custom_config = {
@@ -268,11 +268,26 @@ async def test_pipeline_config_overrides(mock_dependencies, mock_user):
     # Check Retrieval Call Args
     call_kwargs = deps["retrieval"].call_args.kwargs
     
-    # Results per sector = max(3, 20/2) = 10
-    assert call_kwargs["results_per_sector"] == 10
+    assert call_kwargs["results_per_sector"] == 5
     assert call_kwargs["use_reranking"] is False
     assert call_kwargs["dense_weight"] == 1.0
     assert call_kwargs["sparse_weight"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_pipeline_top_k_request_does_not_change_per_sector_limit(mock_dependencies, mock_user):
+    """Requested retrieval depth should not override the fixed 5 chunks per sector."""
+    deps = mock_dependencies
+
+    await query_rag_pipeline(
+        "q",
+        mock_user,
+        "p1",
+        ai_config={"retrieval_depth": 1}
+    )
+
+    call_kwargs = deps["retrieval"].call_args.kwargs
+    assert call_kwargs["results_per_sector"] == 5
 
 @pytest.mark.asyncio
 async def test_background_evaluation_trigger(mock_dependencies, mock_user):
